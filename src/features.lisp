@@ -218,63 +218,33 @@
        (null (gethash "required" schema))
        (null (gethash "additionalProperties" schema))))
 
-(defun %schema-required (schema)
-  (%as-list (and (hash-table-p schema) (gethash "required" schema))))
-
-(defun %check-required (schema value)
-  (let ((obj (or value (json-object))))
-    (dolist (key (%schema-required schema) obj)
-      (unless (and (hash-table-p obj) (nth-value 1 (gethash key obj)))
-        (error 'mcp-error
-               :message (format nil "missing required property ~s" key)
-               :code rpc-protocol:+invalid-params+
-               :data (json-object "reason" "inputSchema" "property" key))))
-    obj))
-
-(defun %schema-json-compile (schema)
-  (let ((fn (and (find-package '#:schema-protocol-json)
-                 (find-symbol "COMPILE-VALIDATOR" '#:schema-protocol-json))))
-    (when (and fn (fboundp fn))
-      (funcall fn schema))))
-
-(defun %schema-validate (validator value)
-  (let ((fn (and (find-package '#:schema-protocol-json)
-                 (find-symbol "VALIDATE-INSTANCE" '#:schema-protocol-json)))
-        (err (and (find-package '#:schema-protocol)
-                  (find-symbol "SCHEMA-VALIDATION-ERROR" '#:schema-protocol))))
-    (when (and fn (fboundp fn))
-      (handler-case
-          (funcall fn validator value)
-        (error (e)
-          (when (and err (typep e err))
-            (error 'mcp-error
-                   :message (princ-to-string e)
-                   :code rpc-protocol:+invalid-params+
-                   :data (json-object "reason" "inputSchema")))
-          (error e))))))
-
-(defun %compiled-schema (schema &optional cached)
-  (or cached
-      (and schema (hash-table-p schema)
-           (not (%trivial-object-schema-p schema))
-           (ignore-errors (%schema-json-compile schema)))))
-
 (defun validate-json-schema (schema value &optional compiled)
-  "Validate VALUE against a JSON Schema. Always enforces `required`.
-   Full draft-07 validation runs when schema-protocol-json is loaded."
+  "Validate VALUE against a JSON Schema via schema-protocol-json:compile-validator."
   (unless (and schema (hash-table-p schema))
     (return-from validate-json-schema value))
-  (let ((value (%check-required schema value)))
-    (when (%trivial-object-schema-p schema)
-      (return-from validate-json-schema value))
-    (let ((validator (%compiled-schema schema compiled)))
-      (when validator
-        (%schema-validate validator (or value (json-object)))))
-    value))
+  (when (%trivial-object-schema-p schema)
+    (return-from validate-json-schema value))
+  (handler-case
+      (let ((validator (or compiled
+                           (schema-protocol-json:compile-validator schema))))
+        (schema-protocol-json:validate-instance validator (or value (json-object)))
+        value)
+    (schema-protocol-json:json-schema-validation-error (e)
+      (error 'mcp-error
+             :message (princ-to-string e)
+             :code rpc-protocol:+invalid-params+
+             :data (json-object "reason" "inputSchema")))
+    (schema-protocol:schema-validation-error (e)
+      (error 'mcp-error
+             :message (princ-to-string e)
+             :code rpc-protocol:+invalid-params+
+             :data (json-object "reason" "inputSchema")))))
 
 (defun validate-tool-arguments (tool arguments)
-  (let ((compiled (or (mcp-tool-compiled-input-schema tool)
-                      (setf (mcp-tool-compiled-input-schema tool)
-                            (ignore-errors
-                             (%compiled-schema (mcp-tool-input-schema tool)))))))
-    (validate-json-schema (mcp-tool-input-schema tool) arguments compiled)))
+  (let ((schema (mcp-tool-input-schema tool)))
+    (unless (or (mcp-tool-compiled-input-schema tool)
+                (%trivial-object-schema-p schema)
+                (not (hash-table-p schema)))
+      (setf (mcp-tool-compiled-input-schema tool)
+            (schema-protocol-json:compile-validator schema)))
+    (validate-json-schema schema arguments (mcp-tool-compiled-input-schema tool))))

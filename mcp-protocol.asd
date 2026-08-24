@@ -3,7 +3,7 @@
   :description "CLOS MCP client/server protocol (2026-07-28 + 2025-11-25 dual-era)"
   :author "egao1980"
   :license "MIT"
-  :depends-on ("rpc-protocol")
+  :depends-on ("rpc-protocol" "schema-protocol" "schema-protocol-json")
   :serial t
   :pathname "src"
   :components ((:file "package")
