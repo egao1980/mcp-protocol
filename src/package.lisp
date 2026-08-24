@@ -3,27 +3,57 @@
   (:export
    #:+mcp-protocol-version+
    #:+mcp-legacy-protocol-version+
+   #:+mcp-error-header-mismatch+
+   #:+mcp-error-missing-client-capability+
    #:+mcp-error-unsupported-protocol-version+
    #:+mcp-default-ttl-ms+
    #:*supported-protocol-versions*
+   #:*mcp-log-levels*
+   #:*mcp-page-size*
    #:mcp-error
    #:mcp-error-message
    #:mcp-error-code
    #:mcp-error-data
+   #:mcp-input-required
+   #:mcp-input-required-requests
+   #:mcp-input-required-state
    #:mcp-peer
    #:mcp-server
    #:mcp-client
    #:mcp-tool
    #:mcp-resource
+   #:mcp-resource-template
    #:mcp-prompt
+   #:mcp-root
+   #:mcp-icon
+   #:mcp-annotations
+   #:mcp-content
+   #:mcp-text-content
+   #:mcp-image-content
+   #:mcp-audio-content
+   #:mcp-embedded-resource
+   #:mcp-resource-link
+   #:mcp-sampling-message
+   #:mcp-model-preferences
+   #:mcp-sampling-request
+   #:mcp-elicit-request
+   #:mcp-completion-ref
+   #:mcp-log-message
+   #:mcp-progress
+   #:mcp-subscription
    #:mcp-backend
    #:mcp-peer-name
    #:mcp-peer-version
+   #:mcp-peer-title
+   #:mcp-peer-icons
    #:mcp-server-protocol-version
    #:mcp-server-tools
    #:mcp-server-resources
+   #:mcp-server-resource-templates
    #:mcp-server-prompts
    #:mcp-server-instructions
+   #:mcp-server-log-level
+   #:mcp-server-subscriptions
    #:mcp-client-transport
    #:mcp-client-era
    #:mcp-client-protocol-version
@@ -31,24 +61,47 @@
    #:mcp-client-server-info
    #:mcp-client-server-capabilities
    #:mcp-client-instructions
+   #:mcp-client-roots
+   #:mcp-client-sampling-handler
+   #:mcp-client-elicitation-handler
+   #:mcp-client-log-handler
+   #:mcp-client-progress-handler
    #:make-mcp-tool
    #:make-mcp-resource
+   #:make-mcp-resource-template
    #:make-mcp-prompt
+   #:make-mcp-root
+   #:make-mcp-icon
+   #:make-mcp-annotations
+   #:make-mcp-sampling-request
+   #:make-mcp-elicit-request
+   #:make-mcp-completion-ref
+   #:make-mcp-log-message
+   #:make-mcp-progress
+   #:make-mcp-subscription
    #:mcp-tool-name
+   #:mcp-tool-title
    #:mcp-tool-description
    #:mcp-tool-input-schema
+   #:mcp-tool-output-schema
+   #:mcp-tool-annotations
    #:mcp-tool-handler
    #:mcp-resource-uri
    #:mcp-resource-name
    #:mcp-resource-description
    #:mcp-resource-mime-type
    #:mcp-resource-handler
+   #:mcp-resource-template-uri
+   #:mcp-resource-template-name
    #:mcp-prompt-name
    #:mcp-prompt-description
    #:mcp-prompt-arguments
    #:mcp-prompt-handler
+   #:mcp-root-uri
+   #:mcp-root-name
    #:register-tool
    #:register-resource
+   #:register-resource-template
    #:register-prompt
    #:mcp-discover
    #:mcp-initialize
@@ -58,8 +111,30 @@
    #:call-tool
    #:list-resources
    #:read-resource
+   #:list-resource-templates
    #:list-prompts
    #:get-prompt
+   #:complete
+   #:listen-subscriptions
+   #:create-message
+   #:elicit
+   #:list-roots
+   #:mcp-log
+   #:set-log-level
+   #:send-progress
+   #:notify-tools-list-changed
+   #:notify-resources-list-changed
+   #:notify-resources-updated
+   #:notify-prompts-list-changed
+   #:request-sampling
+   #:request-elicitation
+   #:request-roots
+   #:fulfill-input-requests
+   #:input-required-result
+   #:validate-json-schema
+   #:validate-tool-arguments
+   #:require-client-capability
+   #:missing-client-capability
    #:dispatch-mcp-method
    #:serve-mcp
    #:make-text-content
@@ -74,4 +149,8 @@
    #:use-mcp-backend)
   (:documentation
    "MCP dual-era protocol: modern 2026-07-28 (stateless _meta + server/discover)
-    and legacy 2025-11-25 (initialize handshake). JSON-RPC via rpc-protocol."))
+    and legacy 2025-11-25 (initialize handshake). JSON-RPC via rpc-protocol.
+    Spec GFs: tools, resources, prompts, templates, completion, subscriptions,
+    sampling, elicitation, roots, logging, progress, MRTR."))
+
+(in-package #:mcp-protocol)

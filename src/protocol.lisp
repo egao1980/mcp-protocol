@@ -6,22 +6,6 @@
 ;;; resultType. No initialize / Mcp-Session-Id.
 ;;; Legacy (2025-11-25): initialize + notifications/initialized.
 
-(defun json-object (&rest kvs)
-  (let ((h (make-hash-table :test 'equal)))
-    (loop for (k v) on kvs by #'cddr
-          unless (or (null k) (eq v :omit))
-            do (setf (gethash k h) v))
-    h))
-
-(defun param (obj key &optional default)
-  (cond
-    ((null obj) default)
-    ((hash-table-p obj) (gethash key obj default))
-    ((listp obj)
-     (let ((cell (assoc key obj :test #'equal)))
-       (if cell (cdr cell) default)))
-    (t default)))
-
 (defun %ensure-backend (&optional (backend *mcp-backend*))
   (or backend
       (error 'mcp-error :message "*mcp-backend* is nil — load an mcp-backend-*")))
@@ -97,9 +81,11 @@
 
 (defun %tool-json (tool)
   (json-object "name" (mcp-tool-name tool)
+               "title" (or (mcp-tool-title tool) :omit)
                "description" (mcp-tool-description tool)
                "inputSchema" (or (mcp-tool-input-schema tool)
-                                 (json-object "type" "object"))))
+                                 (json-object "type" "object"))
+               "outputSchema" (or (mcp-tool-output-schema tool) :omit)))
 
 (defun %resource-json (res)
   (json-object "uri" (mcp-resource-uri res)
@@ -128,18 +114,18 @@
                    :description (param obj "description")
                    :arguments (param obj "arguments")))
 
-(defun %vec-map (seq fn)
-  (map 'list fn (or seq #())))
-
 (defun %server-info (server)
   (json-object "name" (mcp-peer-name server)
-               "version" (mcp-peer-version server)))
+               "version" (mcp-peer-version server)
+               "title" (or (mcp-peer-title server) :omit)))
 
 (defun %server-capabilities (server)
   (declare (ignore server))
-  (json-object "tools" (json-object)
-               "resources" (json-object)
-               "prompts" (json-object)))
+  (json-object "tools" (json-object "listChanged" t)
+               "resources" (json-object "listChanged" t "subscribe" t)
+               "prompts" (json-object "listChanged" t)
+               "completions" (json-object)
+               "logging" (json-object)))
 
 (defun %unsupported-version (requested)
   (error 'mcp-error
@@ -155,6 +141,24 @@
   (let ((ver (%request-version params)))
     (when (and ver (not (member ver *supported-protocol-versions* :test #'string=)))
       (%unsupported-version ver))))
+
+(defun %check-modern-meta (method params)
+  "Modern requests MUST carry protocolVersion + clientCapabilities."
+  (when (%request-modern-p method params)
+    (let ((meta (param params "_meta")))
+      (unless (and meta (stringp (param meta "io.modelcontextprotocol/protocolVersion")))
+        (error 'mcp-error
+               :message "missing _meta.io.modelcontextprotocol/protocolVersion"
+               :code rpc-protocol:+invalid-params+))
+      (unless (param meta "io.modelcontextprotocol/clientCapabilities")
+        (error 'mcp-error
+               :message "missing _meta.io.modelcontextprotocol/clientCapabilities"
+               :code rpc-protocol:+invalid-params+))
+      (let ((lvl (param meta "io.modelcontextprotocol/logLevel")))
+        (when (and lvl (not (member lvl *mcp-log-levels* :test #'string=)))
+          (error 'mcp-error
+                 :message (format nil "invalid log level ~s" lvl)
+                 :code rpc-protocol:+invalid-params+))))))
 
 (defun %request-modern-p (method params)
   (let ((ver (%request-version params)))
@@ -173,6 +177,21 @@
     (when extra-meta
       (setf (gethash "_meta" obj) extra-meta)))
   obj)
+
+(defun %server-result-meta (server)
+  (json-object "io.modelcontextprotocol/serverInfo" (%server-info server)))
+
+(defun %paginate (items cursor &key (limit *mcp-page-size*))
+  (let* ((all (coerce items 'list))
+         (start (if (and cursor (stringp cursor) (plusp (length cursor)))
+                    (or (parse-integer cursor :junk-allowed t) 0)
+                    0))
+         (start (min (max 0 start) (length all)))
+         (rest (nthcdr start all))
+         (page (subseq rest 0 (min limit (length rest))))
+         (next (when (> (length rest) limit)
+                 (princ-to-string (+ start limit)))))
+    (values page next)))
 
 (defun %with-cache (obj &key (ttl-ms +mcp-default-ttl-ms+) (scope "public"))
   "SEP-2549 CacheableResult: ttlMs + cacheScope on list/read results."
@@ -211,11 +230,12 @@
       (%unsupported-version ver))
     (setf (mcp-server-protocol-version server) ver)
     (%maybe-complete
-     (json-object "supportedVersions" (coerce *supported-protocol-versions* 'vector)
-                  "capabilities" (%server-capabilities server)
-                  "instructions" (or (mcp-server-instructions server) :omit))
+     (%with-cache
+      (json-object "supportedVersions" (coerce *supported-protocol-versions* 'vector)
+                   "capabilities" (%server-capabilities server)
+                   "instructions" (or (mcp-server-instructions server) :omit)))
      t
-     (json-object "io.modelcontextprotocol/serverInfo" (%server-info server)))))
+     (%server-result-meta server)))))
 
 (defmethod mcp-discover ((client mcp-client) &key protocol-version capabilities client-info)
   (when protocol-version
@@ -342,12 +362,15 @@
   (let ((tool (gethash name (mcp-server-tools server))))
     (unless tool
       (error 'mcp-error :message (format nil "unknown tool ~s" name)
-                        :code rpc-protocol:+method-not-found+))
+                        :code rpc-protocol:+invalid-params+))
+    (validate-tool-arguments tool arguments)
     (let ((fn (mcp-tool-handler tool)))
       (unless fn
-        (error 'mcp-error :message (format nil "tool ~s has no handler" name)))
+        (error 'mcp-error :message (format nil "tool ~s has no handler" name)
+                          :code rpc-protocol:+invalid-params+))
       (handler-case
           (%coerce-tool-result (funcall fn arguments))
+        (mcp-input-required (c) (signal c))
         (mcp-error (e) (error e))
         (error (e)
           (tool-result (list (make-text-content (format nil "~a" e)))
@@ -362,7 +385,7 @@
   (let ((res (gethash uri (mcp-server-resources server))))
     (unless res
       (error 'mcp-error :message (format nil "unknown resource ~s" uri)
-                        :code rpc-protocol:+method-not-found+))
+                        :code rpc-protocol:+invalid-params+))
     (let* ((fn (mcp-resource-handler res))
            (body (if fn (funcall fn res) "")))
       (json-object "contents"
@@ -380,7 +403,7 @@
   (let ((prompt (gethash name (mcp-server-prompts server))))
     (unless prompt
       (error 'mcp-error :message (format nil "unknown prompt ~s" name)
-                        :code rpc-protocol:+method-not-found+))
+                        :code rpc-protocol:+invalid-params+))
     (let ((fn (mcp-prompt-handler prompt)))
       (if fn
           (funcall fn arguments)
@@ -397,8 +420,20 @@
     (%vec-map (param result "tools") #'%parse-tool)))
 
 (defmethod call-tool ((client mcp-client) name arguments &key)
-  (%rpc-call client "tools/call"
-             (json-object "name" name "arguments" (or arguments (json-object)))))
+  (let ((result (%rpc-call client "tools/call"
+                           (json-object "name" name
+                                        "arguments" (or arguments (json-object))))))
+    (if (and (hash-table-p result)
+             (equal (gethash "resultType" result) "input_required"))
+        (%rpc-call client "tools/call"
+                   (json-object "name" name
+                                "arguments" (or arguments (json-object))
+                                "inputResponses"
+                                (fulfill-input-requests
+                                 client (gethash "inputRequests" result))
+                                "requestState" (or (gethash "requestState" result)
+                                                   :omit)))
+        result)))
 
 (defmethod list-resources ((client mcp-client) &key cursor)
   (let ((result (%rpc-call client "resources/list"
@@ -416,65 +451,169 @@
   (%rpc-call client "prompts/get"
              (json-object "name" name "arguments" (or arguments :omit))))
 
+(defmethod list-resource-templates ((client mcp-client) &key cursor)
+  (let ((result (%rpc-call client "resources/templates/list"
+                           (json-object "cursor" (or cursor :omit)))))
+    (%vec-map (param result "resourceTemplates")
+              (lambda (obj)
+                (make-mcp-resource-template
+                 (param obj "uriTemplate")
+                 :name (param obj "name")
+                 :title (param obj "title")
+                 :description (param obj "description")
+                 :mime-type (param obj "mimeType"))))))
+
+(defmethod complete ((client mcp-client) ref argument &key context)
+  (%rpc-call client "completion/complete"
+             (json-object "ref" ref
+                          "argument" argument
+                          "context" (or context :omit))))
+
+(defmethod listen-subscriptions ((client mcp-client) filters &key)
+  (%rpc-call client "subscriptions/listen"
+             (json-object "notifications" (or filters (json-object)))))
+
+(defmethod set-log-level ((client mcp-client) level &key)
+  (%rpc-call client "logging/setLevel" (json-object "level" level)))
+
+(defmethod notify-tools-list-changed ((client mcp-client) &key)
+  (%rpc-notify client "notifications/tools/list_changed" (json-object)))
+
+(defmethod notify-resources-list-changed ((client mcp-client) &key)
+  (%rpc-notify client "notifications/resources/list_changed" (json-object)))
+
+(defmethod notify-resources-updated ((client mcp-client) uri &key)
+  (%rpc-notify client "notifications/resources/updated" (json-object "uri" uri)))
+
+(defmethod notify-prompts-list-changed ((client mcp-client) &key)
+  (%rpc-notify client "notifications/prompts/list_changed" (json-object)))
+
 ;;; --- JSON-RPC dispatch / serve --------------------------------------------
+
+(defun %resource-template-json (tmpl)
+  (json-object "uriTemplate" (mcp-resource-template-uri tmpl)
+               "name" (mcp-resource-template-name tmpl)
+               "title" (or (mcp-resource-template-title tmpl) :omit)
+               "description" (mcp-resource-template-description tmpl)
+               "mimeType" (or (mcp-resource-template-mime-type tmpl) :omit)))
+
+(defun %paged-catalog (items encoder cursor)
+  (multiple-value-bind (page next)
+      (%paginate items cursor)
+    (values (map 'vector encoder page) next)))
 
 (defun dispatch-mcp-method (server method params)
   "HANDLER for rpc-serve. METHOD is a string. Returns a JSON-able result."
   (let ((params (%ensure-params params)))
     (%check-version params)
-    (let ((modern-p (%request-modern-p method params)))
+    (%check-modern-meta method params)
+    (let ((modern-p (%request-modern-p method params))
+          (meta (%server-result-meta server)))
       (flet ((fail (msg &optional (code rpc-protocol:+invalid-params+))
                (error 'rpc-protocol:rpc-error :message msg :code code))
-             (done (obj &optional extra-meta)
-               (%maybe-complete obj modern-p extra-meta)))
-        (cond
-          ((string= method "server/discover")
-           (mcp-discover server :protocol-version (or (%request-version params)
-                                                      +mcp-protocol-version+)))
-          ((string= method "initialize")
-           (mcp-initialize server
-                           :protocol-version (param params "protocolVersion")
-                           :capabilities (param params "capabilities")
-                           :client-info (param params "clientInfo")))
-          ((string= method "notifications/initialized")
-           (json-object))
-          ((string= method "ping")
-           (done (mcp-ping server)))
-          ((string= method "notifications/cancelled")
-           (mcp-cancel server
-                       :request-id (param params "requestId")
-                       :reason (param params "reason"))
-           (json-object))
-          ((string= method "tools/list")
-           (done (%with-cache
-                  (json-object "tools" (map 'vector #'%tool-json
-                                            (list-tools server :cursor (param params "cursor")))))))
-          ((string= method "tools/call")
-           (done (call-tool server (or (param params "name") (fail "missing tool name"))
-                            (param params "arguments"))))
-          ((string= method "resources/list")
-           (done (%with-cache
-                  (json-object "resources" (map 'vector #'%resource-json
-                                                (list-resources server :cursor (param params "cursor")))))))
-          ((string= method "resources/read")
-           (done (%with-cache
-                  (read-resource server (or (param params "uri") (fail "missing uri"))))))
-          ((string= method "prompts/list")
-           (done (%with-cache
-                  (json-object "prompts" (map 'vector #'%prompt-json (list-prompts server))))))
-          ((string= method "prompts/get")
-           (done (get-prompt server (or (param params "name") (fail "missing prompt name"))
-                             :arguments (param params "arguments"))))
-          (t
-           (error 'rpc-protocol:rpc-error
-                  :code rpc-protocol:+method-not-found+
-                  :message (format nil "unknown MCP method ~s" method))))))))
+             (done (obj)
+               (%maybe-complete obj modern-p meta)))
+        (handler-case
+            (cond
+              ((string= method "server/discover")
+               (mcp-discover server :protocol-version (or (%request-version params)
+                                                          +mcp-protocol-version+)))
+              ((string= method "initialize")
+               (mcp-initialize server
+                               :protocol-version (param params "protocolVersion")
+                               :capabilities (param params "capabilities")
+                               :client-info (param params "clientInfo")))
+              ((string= method "notifications/initialized")
+               (json-object))
+              ((string= method "ping")
+               (done (mcp-ping server)))
+              ((string= method "notifications/cancelled")
+               (mcp-cancel server
+                           :request-id (param params "requestId")
+                           :reason (param params "reason"))
+               (json-object))
+              ((string= method "notifications/progress")
+               (send-progress server (param params "progress")
+                              :progress-token (param params "progressToken")
+                              :total (param params "total")
+                              :message (param params "message"))
+               (json-object))
+              ((string= method "notifications/message")
+               (mcp-log server (param params "level") (param params "data")
+                        :logger (param params "logger"))
+               (json-object))
+              ((string= method "tools/list")
+               (multiple-value-bind (vec next)
+                   (%paged-catalog (list-tools server :cursor (param params "cursor"))
+                                   #'%tool-json (param params "cursor"))
+                 (done (%with-cache
+                        (json-object "tools" vec "nextCursor" (or next :omit))))))
+              ((string= method "tools/call")
+               (done (call-tool server (or (param params "name") (fail "missing tool name"))
+                                (param params "arguments"))))
+              ((string= method "resources/list")
+               (multiple-value-bind (vec next)
+                   (%paged-catalog (list-resources server :cursor (param params "cursor"))
+                                   #'%resource-json (param params "cursor"))
+                 (done (%with-cache
+                        (json-object "resources" vec "nextCursor" (or next :omit))))))
+              ((string= method "resources/read")
+               (done (%with-cache
+                      (read-resource server (or (param params "uri") (fail "missing uri"))))))
+              ((string= method "resources/templates/list")
+               (multiple-value-bind (vec next)
+                   (%paged-catalog (list-resource-templates server
+                                                            :cursor (param params "cursor"))
+                                   #'%resource-template-json (param params "cursor"))
+                 (done (%with-cache
+                        (json-object "resourceTemplates" vec
+                                     "nextCursor" (or next :omit))))))
+              ((string= method "prompts/list")
+               (multiple-value-bind (vec next)
+                   (%paged-catalog (list-prompts server) #'%prompt-json
+                                   (param params "cursor"))
+                 (done (%with-cache
+                        (json-object "prompts" vec "nextCursor" (or next :omit))))))
+              ((string= method "prompts/get")
+               (done (get-prompt server (or (param params "name") (fail "missing prompt name"))
+                                 :arguments (param params "arguments"))))
+              ((string= method "completion/complete")
+               (done (complete server
+                               (or (param params "ref") (fail "missing ref"))
+                               (or (param params "argument") (fail "missing argument"))
+                               :context (param params "context"))))
+              ((string= method "subscriptions/listen")
+               (done (listen-subscriptions server (param params "notifications"))))
+              ((string= method "logging/setLevel")
+               (done (set-log-level server
+                                    (or (param params "level") (fail "missing level")))))
+              ((string= method "sampling/createMessage")
+               (fail "sampling/createMessage is an MRTR input request, not a client RPC"
+                     rpc-protocol:+method-not-found+))
+              ((string= method "elicitation/create")
+               (fail "elicitation/create is an MRTR input request, not a client RPC"
+                     rpc-protocol:+method-not-found+))
+              ((string= method "roots/list")
+               (fail "roots/list is an MRTR input request, not a client RPC"
+                     rpc-protocol:+method-not-found+))
+              (t
+               (error 'rpc-protocol:rpc-error
+                      :code rpc-protocol:+method-not-found+
+                      :message (format nil "unknown MCP method ~s" method))))
+          (mcp-input-required (c)
+            (%maybe-complete
+             (input-required-result (mcp-input-required-requests c)
+                                    (mcp-input-required-state c))
+             t meta)))))))
 
 (defun serve-mcp (server &key (transport rpc-protocol:*rpc-transport*))
   (rpc-protocol:rpc-serve
    (lambda (method params)
      (handler-case
          (dispatch-mcp-method server method params)
+       (mcp-input-required (c)
+         (input-required-result (mcp-input-required-requests c)
+                                (mcp-input-required-state c)))
        (mcp-error (c)
          (error 'rpc-protocol:rpc-error
                 :message (or (mcp-error-message c) "mcp error")
@@ -502,3 +641,6 @@
          (loop for (k v) on args by #'cddr
                unless (eq k :backend)
                  collect k and collect v)))
+
+(defun use-mcp-backend (backend)
+  (setf *mcp-backend* backend))

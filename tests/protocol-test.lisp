@@ -149,6 +149,11 @@
       (ok (eq :legacy (mcp-protocol:mcp-client-era client)))
       (ok (equal "2025-11-25" (gethash "protocolVersion" init))))))
 
+(defun %modern-meta ()
+  (mcp-protocol:json-object
+   "io.modelcontextprotocol/protocolVersion" "2026-07-28"
+   "io.modelcontextprotocol/clientCapabilities" (mcp-protocol:json-object)))
+
 (deftest modern-list-is-cacheable
   "SEP-2549: tools/list (and other list/read results) need ttlMs + cacheScope."
   (multiple-value-bind (client server)
@@ -156,9 +161,7 @@
     (declare (ignore client))
     (let ((raw (mcp-protocol:dispatch-mcp-method
                 server "tools/list"
-                (mcp-protocol:json-object
-                 "_meta" (mcp-protocol:json-object
-                          "io.modelcontextprotocol/protocolVersion" "2026-07-28")))))
+                (mcp-protocol:json-object "_meta" (%modern-meta)))))
       (ok (equal "complete" (gethash "resultType" raw)))
       (ok (eql mcp-protocol:+mcp-default-ttl-ms+ (gethash "ttlMs" raw)))
       (ok (equal "public" (gethash "cacheScope" raw))))))
@@ -181,3 +184,166 @@
                   :test #'string=))
         (ok (equal "1999-01-01"
                    (mcp-protocol:param (mcp-protocol:mcp-error-data c) "requested")))))))
+
+(deftest spec-classes-and-gfs
+  (ok (find-class 'mcp-protocol:mcp-resource-template))
+  (ok (find-class 'mcp-protocol:mcp-sampling-request))
+  (ok (find-class 'mcp-protocol:mcp-elicit-request))
+  (ok (find-class 'mcp-protocol:mcp-root))
+  (ok (find-class 'mcp-protocol:mcp-completion-ref))
+  (ok (find-class 'mcp-protocol:mcp-log-message))
+  (ok (find-class 'mcp-protocol:mcp-progress))
+  (ok (find-class 'mcp-protocol:mcp-subscription))
+  (ok (fboundp 'mcp-protocol:create-message))
+  (ok (fboundp 'mcp-protocol:elicit))
+  (ok (fboundp 'mcp-protocol:list-roots))
+  (ok (fboundp 'mcp-protocol:complete))
+  (ok (fboundp 'mcp-protocol:listen-subscriptions))
+  (ok (fboundp 'mcp-protocol:request-sampling)))
+
+(deftest modern-meta-required
+  (multiple-value-bind (client server)
+      (%wired)
+    (declare (ignore client))
+    (handler-case
+        (progn
+          (mcp-protocol:dispatch-mcp-method
+           server "tools/list"
+           (mcp-protocol:json-object
+            "_meta" (mcp-protocol:json-object
+                     "io.modelcontextprotocol/protocolVersion" "2026-07-28")))
+          (fail "expected missing clientCapabilities"))
+      (mcp-protocol:mcp-error (c)
+        (ok (eql rpc-protocol:+invalid-params+ (mcp-protocol:mcp-error-code c)))))))
+
+(deftest unknown-tool-is-invalid-params
+  (multiple-value-bind (client server)
+      (%wired)
+    (declare (ignore client))
+    (handler-case
+        (progn
+          (mcp-protocol:dispatch-mcp-method
+           server "tools/call"
+           (mcp-protocol:json-object
+            "name" "nope"
+            "_meta" (%modern-meta)))
+          (fail "expected unknown tool"))
+      (mcp-protocol:mcp-error (c)
+        (ok (eql rpc-protocol:+invalid-params+ (mcp-protocol:mcp-error-code c))))
+      (rpc-protocol:rpc-error (c)
+        (ok (eql rpc-protocol:+invalid-params+ (rpc-protocol:rpc-error-code c)))))))
+
+(deftest input-schema-validation
+  (let ((server (%echo-server)))
+    (mcp-protocol:register-tool
+     server
+     (mcp-protocol:make-mcp-tool
+      "need-msg"
+      :input-schema (mcp-protocol:json-object
+                     "type" "object"
+                     "required" (vector "msg")
+                     "properties"
+                     (mcp-protocol:json-object
+                      "msg" (mcp-protocol:json-object "type" "string")))
+      :handler (lambda (args)
+                 (mcp-protocol:tool-result
+                  (list (mcp-protocol:make-text-content
+                         (mcp-protocol:param args "msg")))))))
+    (ok (hash-table-p
+         (mcp-protocol:call-tool server "need-msg"
+                                 (mcp-protocol:json-object "msg" "ok"))))
+    (ok (signals (mcp-protocol:call-tool server "need-msg"
+                                         (mcp-protocol:json-object))
+                 'mcp-protocol:mcp-error))))
+
+(deftest templates-complete-listen-log
+  (multiple-value-bind (client server)
+      (%wired)
+    (mcp-protocol:register-resource-template
+     server
+     (mcp-protocol:make-mcp-resource-template
+      "memo://{id}" :name "memo"
+      :complete (lambda (name value)
+                  (declare (ignore name))
+                  (list (concatenate 'string value "1")))))
+    (mcp-protocol:register-prompt
+     server
+     (mcp-protocol:make-mcp-prompt
+      "pick" :complete (lambda (name value)
+                         (declare (ignore name value))
+                         '("alpha" "beta"))))
+    (let ((tmpls (mcp-protocol:list-resource-templates client)))
+      (ok (= 1 (length tmpls)))
+      (ok (equal "memo://{id}" (mcp-protocol:mcp-resource-template-uri (first tmpls)))))
+    (let ((comp (mcp-protocol:complete
+                 client
+                 (mcp-protocol:json-object "type" "ref/prompt" "name" "pick")
+                 (mcp-protocol:json-object "name" "x" "value" ""))))
+      (ok (equal "alpha"
+                 (elt (gethash "values" (gethash "completion" comp)) 0))))
+    (let ((sub (mcp-protocol:listen-subscriptions
+                client (mcp-protocol:json-object "toolsListChanged" t))))
+      (ok (eq t (gethash "toolsListChanged" (gethash "notifications" sub)))))
+    (ok (hash-table-p (mcp-protocol:set-log-level client "debug")))))
+
+(deftest client-feature-handlers
+  (let ((client (make-instance 'mcp-protocol:mcp-client
+                               :roots (list (mcp-protocol:make-mcp-root
+                                             "file:///tmp" :name "tmp"))
+                               :sampling-handler
+                               (lambda (params)
+                                 (declare (ignore params))
+                                 (mcp-protocol:json-object "role" "assistant"
+                                                           "model" "test"
+                                                           "content" (mcp-protocol:make-text-content "hi")))
+                               :elicitation-handler
+                               (lambda (params)
+                                 (declare (ignore params))
+                                 (mcp-protocol:json-object "action" "accept"
+                                                           "content" (mcp-protocol:json-object))))))
+    (ok (equal "file:///tmp"
+               (gethash "uri" (elt (gethash "roots" (mcp-protocol:list-roots client)) 0))))
+    (ok (equal "assistant" (gethash "role" (mcp-protocol:create-message client
+                                                                        (mcp-protocol:json-object)))))
+    (ok (equal "accept" (gethash "action" (mcp-protocol:elicit client
+                                                               (mcp-protocol:json-object)))))))
+
+(deftest mrtr-input-required
+  (let ((server (%echo-server)))
+    (mcp-protocol:register-tool
+     server
+     (mcp-protocol:make-mcp-tool
+      "need-sample"
+      :input-schema (mcp-protocol:json-object "type" "object")
+      :handler (lambda (args)
+                 (declare (ignore args))
+                 (mcp-protocol:request-sampling (mcp-protocol:json-object)))))
+    (let ((raw (mcp-protocol:dispatch-mcp-method
+                server "tools/call"
+                (mcp-protocol:json-object "name" "need-sample"
+                                          "_meta" (%modern-meta)))))
+      (ok (equal "input_required" (gethash "resultType" raw)))
+      (ok (gethash "inputRequests" raw)))))
+
+(deftest pagination-next-cursor
+  (let ((server (make-instance 'mcp-protocol:mcp-server :name "page" :version "0"))
+        (mcp-protocol:*mcp-page-size* 2))
+    (loop for i from 0 below 3
+          do (mcp-protocol:register-tool
+              server
+              (mcp-protocol:make-mcp-tool
+               (format nil "t~d" i)
+               :input-schema (mcp-protocol:json-object "type" "object")
+               :handler (lambda (args) (declare (ignore args)) "x"))))
+    (let ((page1 (mcp-protocol:dispatch-mcp-method
+                  server "tools/list"
+                  (mcp-protocol:json-object "_meta" (%modern-meta)))))
+      (ok (eql 2 (length (gethash "tools" page1))))
+      (ok (equal "2" (gethash "nextCursor" page1)))
+      (let ((page2 (mcp-protocol:dispatch-mcp-method
+                    server "tools/list"
+                    (mcp-protocol:json-object
+                     "cursor" (gethash "nextCursor" page1)
+                     "_meta" (%modern-meta)))))
+        (ok (eql 1 (length (gethash "tools" page2))))
+        (ok (null (gethash "nextCursor" page2)))))))

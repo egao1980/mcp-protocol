@@ -27,7 +27,20 @@ JSON-RPC via [`rpc-protocol`](https://github.com/egao1980/rpc-protocol). **Not**
 
 Transports: [`mcp-backend-stdio`](https://github.com/egao1980/mcp-backend-stdio), [`mcp-backend-streamable-http`](https://github.com/egao1980/mcp-backend-streamable-http).
 
-Wave-1 does not implement sampling, elicitation, roots, completions, OAuth, or Tasks.
+Spec surface (GFs + CLOS). Backends may leave I/O unimplemented:
+
+| Area | Types / GFs |
+|------|-------------|
+| Tools / resources / prompts | `mcp-tool`, `mcp-resource`, `mcp-prompt`, `list-*`, `call-tool`, `read-resource`, `get-prompt` |
+| Resource templates | `mcp-resource-template`, `register-resource-template`, `list-resource-templates` |
+| Completions | `mcp-completion-ref`, `complete` |
+| Subscriptions | `mcp-subscription`, `listen-subscriptions`, `notify-*-list-changed`, `notify-resources-updated` |
+| Sampling / elicitation / roots | `mcp-sampling-request`, `mcp-elicit-request`, `mcp-root`, `create-message`, `elicit`, `list-roots` |
+| MRTR | `mcp-input-required`, `request-sampling` / `request-elicitation` / `request-roots`, `fulfill-input-requests` |
+| Logging / progress | `mcp-log-message`, `mcp-progress`, `mcp-log`, `set-log-level`, `send-progress` |
+| Validation | `validate-json-schema` / `validate-tool-arguments` via `schema-protocol-json` |
+
+OAuth stays transport-level (HTTP backend), not a protocol GF.
 
 Brief: [cl-stack/docs/capabilities/mcp.md](https://github.com/egao1980/cl-stack/blob/main/docs/capabilities/mcp.md). Tracks [cl-stack#185](https://github.com/egao1980/cl-stack/issues/185).
 
