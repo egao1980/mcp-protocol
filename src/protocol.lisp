@@ -235,7 +235,7 @@
                    "capabilities" (%server-capabilities server)
                    "instructions" (or (mcp-server-instructions server) :omit)))
      t
-     (%server-result-meta server)))))
+     (%server-result-meta server))))
 
 (defmethod mcp-discover ((client mcp-client) &key protocol-version capabilities client-info)
   (when protocol-version

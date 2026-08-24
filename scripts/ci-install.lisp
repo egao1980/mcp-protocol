@@ -25,7 +25,7 @@
    (cl-repo:ensure-system-dependencies "mcp-protocol"
      :also-tests t
      :default-source :oci
-     :with '("dissect")
+     :with '("dissect" "schema-protocol" "schema-protocol-json")
      :sources '(("dissect" :ql)))))
 
 (format t "~&; ci: install phase done~%")

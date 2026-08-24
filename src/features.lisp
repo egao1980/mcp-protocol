@@ -85,7 +85,7 @@
                              (funcall fn arg-name arg-value)
                              #())
                          'vector)
-        "hasMore" :false))))
+        "hasMore" :false)))))
 
 (defgeneric listen-subscriptions (peer filters &key)
   (:method ((server mcp-server) filters &key)
@@ -103,7 +103,7 @@
         "resourcesListChanged" (mcp-subscription-resources-list-changed sub)
         "promptsListChanged" (mcp-subscription-prompts-list-changed sub)
         "resourceSubscriptions"
-        (coerce (or (mcp-subscription-resource-uris sub) #()) 'vector)))))
+        (coerce (or (mcp-subscription-resource-uris sub) #()) 'vector))))))
 
 (defgeneric create-message (peer params &key)
   (:documentation "sampling/createMessage — client GF. Backend/host supplies the LLM.")
@@ -218,30 +218,59 @@
        (null (gethash "required" schema))
        (null (gethash "additionalProperties" schema))))
 
+(defun %schema-required (schema)
+  (%as-list (and (hash-table-p schema) (gethash "required" schema))))
+
+(defun %check-required (schema value)
+  (let ((obj (or value (json-object))))
+    (dolist (key (%schema-required schema) obj)
+      (unless (and (hash-table-p obj) (nth-value 1 (gethash key obj)))
+        (error 'mcp-error
+               :message (format nil "missing required property ~s" key)
+               :code rpc-protocol:+invalid-params+
+               :data (json-object "reason" "inputSchema" "property" key))))
+    obj))
+
+(defun %schema-json-compile (schema)
+  (let ((fn (and (find-package '#:schema-protocol-json)
+                 (find-symbol "COMPILE-VALIDATOR" '#:schema-protocol-json))))
+    (when (and fn (fboundp fn))
+      (funcall fn schema))))
+
+(defun %schema-validate (validator value)
+  (let ((fn (and (find-package '#:schema-protocol-json)
+                 (find-symbol "VALIDATE-INSTANCE" '#:schema-protocol-json)))
+        (err (and (find-package '#:schema-protocol)
+                  (find-symbol "SCHEMA-VALIDATION-ERROR" '#:schema-protocol))))
+    (when (and fn (fboundp fn))
+      (handler-case
+          (funcall fn validator value)
+        (error (e)
+          (when (and err (typep e err))
+            (error 'mcp-error
+                   :message (princ-to-string e)
+                   :code rpc-protocol:+invalid-params+
+                   :data (json-object "reason" "inputSchema")))
+          (error e))))))
+
 (defun %compiled-schema (schema &optional cached)
   (or cached
       (and schema (hash-table-p schema)
            (not (%trivial-object-schema-p schema))
-           (schema-protocol-json:compile-schema schema))))
+           (ignore-errors (%schema-json-compile schema)))))
 
 (defun validate-json-schema (schema value &optional compiled)
-  "Validate VALUE against a JSON Schema document via schema-protocol-json."
-  (unless (and schema (hash-table-p schema) (not (%trivial-object-schema-p schema)))
+  "Validate VALUE against a JSON Schema. Always enforces `required`.
+   Full draft-07 validation runs when schema-protocol-json is loaded."
+  (unless (and schema (hash-table-p schema))
     (return-from validate-json-schema value))
-  (handler-case
-      (let ((class (%compiled-schema schema compiled)))
-        (when class
-          (schema-protocol:validate class (or value (json-object))))
-        value)
-    (schema-protocol:schema-validation-error (e)
-      (error 'mcp-error
-             :message (princ-to-string e)
-             :code rpc-protocol:+invalid-params+
-             :data (json-object "reason" "inputSchema")))
-    (error (e)
-      (error 'mcp-error
-             :message (format nil "inputSchema compile/validate failed: ~a" e)
-             :code rpc-protocol:+invalid-params+))))
+  (let ((value (%check-required schema value)))
+    (when (%trivial-object-schema-p schema)
+      (return-from validate-json-schema value))
+    (let ((validator (%compiled-schema schema compiled)))
+      (when validator
+        (%schema-validate validator (or value (json-object)))))
+    value))
 
 (defun validate-tool-arguments (tool arguments)
   (let ((compiled (or (mcp-tool-compiled-input-schema tool)
