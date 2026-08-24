@@ -49,7 +49,7 @@
     (let ((result (mcp-protocol:call-tool server "echo"
                                           (mcp-protocol:json-object "msg" "hi"))))
       (ok (hash-table-p result))
-      (ok (equal :false (gethash "isError" result))))
+      (ok (null (gethash "isError" result))))
     (ok (search "hello"
                 (gethash "text"
                          (elt (gethash "contents"
@@ -99,6 +99,32 @@
       (ok (equal "legacy"
                  (gethash "text" (elt (gethash "content" call) 0)))))))
 
+(deftest discover-fallback-invalid-params
+  "FastMCP 3 rejects server/discover with -32602, not -32601."
+  (let* ((server (%echo-server))
+         (transport (rpc-backend-inprocess:make-inprocess-rpc-transport))
+         (client (make-instance 'mcp-protocol:mcp-client
+                                :transport transport
+                                :era :unknown
+                                :name "test-client"
+                                :version "0.1.0")))
+    (rpc-protocol:rpc-serve
+     (lambda (method params)
+       (if (string= method "server/discover")
+           (error 'rpc-protocol:rpc-invalid-params
+                  :message "Invalid request parameters")
+           (handler-case
+               (mcp-protocol:dispatch-mcp-method server method params)
+             (mcp-protocol:mcp-error (c)
+               (error 'rpc-protocol:rpc-error
+                      :message (mcp-protocol:mcp-error-message c)
+                      :code (mcp-protocol:mcp-error-code c)
+                      :data (mcp-protocol:mcp-error-data c))))))
+     :transport transport)
+    (let ((init (mcp-protocol:mcp-initialize client)))
+      (ok (eq :legacy (mcp-protocol:mcp-client-era client)))
+      (ok (equal "2025-11-25" (gethash "protocolVersion" init))))))
+
 (deftest discover-fallback-to-legacy
   (let* ((server (%echo-server))
          (transport (rpc-backend-inprocess:make-inprocess-rpc-transport))
@@ -122,6 +148,20 @@
     (let ((init (mcp-protocol:mcp-initialize client)))
       (ok (eq :legacy (mcp-protocol:mcp-client-era client)))
       (ok (equal "2025-11-25" (gethash "protocolVersion" init))))))
+
+(deftest modern-list-is-cacheable
+  "SEP-2549: tools/list (and other list/read results) need ttlMs + cacheScope."
+  (multiple-value-bind (client server)
+      (%wired)
+    (declare (ignore client))
+    (let ((raw (mcp-protocol:dispatch-mcp-method
+                server "tools/list"
+                (mcp-protocol:json-object
+                 "_meta" (mcp-protocol:json-object
+                          "io.modelcontextprotocol/protocolVersion" "2026-07-28")))))
+      (ok (equal "complete" (gethash "resultType" raw)))
+      (ok (eql mcp-protocol:+mcp-default-ttl-ms+ (gethash "ttlMs" raw)))
+      (ok (equal "public" (gethash "cacheScope" raw))))))
 
 (deftest unsupported-version-32022
   (multiple-value-bind (client server)

@@ -85,7 +85,7 @@
 
 (defun tool-result (content &key is-error)
   (json-object "content" (if (listp content) (coerce content 'vector) content)
-               "isError" (if is-error t :false)))
+               "isError" (if is-error t :omit)))
 
 (defun %coerce-tool-result (value)
   (cond
@@ -172,6 +172,15 @@
       (setf (gethash "resultType" obj) "complete"))
     (when extra-meta
       (setf (gethash "_meta" obj) extra-meta)))
+  obj)
+
+(defun %with-cache (obj &key (ttl-ms +mcp-default-ttl-ms+) (scope "public"))
+  "SEP-2549 CacheableResult: ttlMs + cacheScope on list/read results."
+  (when (hash-table-p obj)
+    (unless (gethash "ttlMs" obj)
+      (setf (gethash "ttlMs" obj) ttl-ms))
+    (unless (gethash "cacheScope" obj)
+      (setf (gethash "cacheScope" obj) scope)))
   obj)
 
 ;;; --- registry -------------------------------------------------------------
@@ -267,12 +276,6 @@
       ((listp raw) raw)
       (t (list raw)))))
 
-(defun %fallback-to-legacy-p (err)
-  (let ((code (mcp-error-code err)))
-    (or (eql code rpc-protocol:+method-not-found+)
-        (eql code rpc-protocol:+internal-error+)
-        (eql code +mcp-error-unsupported-protocol-version+))))
-
 (defmethod mcp-initialize ((client mcp-client) &key protocol-version capabilities
                                                  client-info server-info)
   (declare (ignore server-info))
@@ -298,8 +301,7 @@
                  (mcp-discover client :protocol-version retry
                                :capabilities capabilities
                                :client-info client-info)))))
-         (unless (%fallback-to-legacy-p c)
-           (error c))
+         ;; Any other discover failure (FastMCP 3 uses -32602, not -32601) → initialize.
          (setf (mcp-client-era client) :legacy
                (mcp-client-protocol-version client) +mcp-legacy-protocol-version+)
          (%legacy-initialize client
@@ -444,18 +446,22 @@
                        :reason (param params "reason"))
            (json-object))
           ((string= method "tools/list")
-           (done (json-object "tools" (map 'vector #'%tool-json
-                                           (list-tools server :cursor (param params "cursor"))))))
+           (done (%with-cache
+                  (json-object "tools" (map 'vector #'%tool-json
+                                            (list-tools server :cursor (param params "cursor")))))))
           ((string= method "tools/call")
            (done (call-tool server (or (param params "name") (fail "missing tool name"))
                             (param params "arguments"))))
           ((string= method "resources/list")
-           (done (json-object "resources" (map 'vector #'%resource-json
-                                               (list-resources server :cursor (param params "cursor"))))))
+           (done (%with-cache
+                  (json-object "resources" (map 'vector #'%resource-json
+                                                (list-resources server :cursor (param params "cursor")))))))
           ((string= method "resources/read")
-           (done (read-resource server (or (param params "uri") (fail "missing uri")))))
+           (done (%with-cache
+                  (read-resource server (or (param params "uri") (fail "missing uri"))))))
           ((string= method "prompts/list")
-           (done (json-object "prompts" (map 'vector #'%prompt-json (list-prompts server)))))
+           (done (%with-cache
+                  (json-object "prompts" (map 'vector #'%prompt-json (list-prompts server))))))
           ((string= method "prompts/get")
            (done (get-prompt server (or (param params "name") (fail "missing prompt name"))
                              :arguments (param params "arguments"))))

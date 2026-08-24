@@ -4,6 +4,7 @@
    #:+mcp-protocol-version+
    #:+mcp-legacy-protocol-version+
    #:+mcp-error-unsupported-protocol-version+
+   #:+mcp-default-ttl-ms+
    #:*supported-protocol-versions*
    #:mcp-error
    #:mcp-error-message

@@ -21,7 +21,7 @@ JSON-RPC via [`rpc-protocol`](https://github.com/egao1980/rpc-protocol). **Not**
                                                         (declare (ignore args))
                                                         "pong")))
   (mcp-protocol:serve-mcp server :transport transport)
-  (mcp-protocol:mcp-initialize client)   ; discover, or initialize if peer is legacy
+  (mcp-protocol:mcp-initialize client)   ; discover; any non-retryable error → initialize
   (mcp-protocol:call-tool client "ping" (mcp-protocol:json-object)))
 ```
 
