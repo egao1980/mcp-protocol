@@ -267,12 +267,6 @@
       ((listp raw) raw)
       (t (list raw)))))
 
-(defun %fallback-to-legacy-p (err)
-  "Spec: any discover failure that is not a retryable -32022 → initialize.
-   FastMCP 3 / older SDKs reject server/discover with -32602, not -32601."
-  (declare (ignore err))
-  t)
-
 (defmethod mcp-initialize ((client mcp-client) &key protocol-version capabilities
                                                  client-info server-info)
   (declare (ignore server-info))
@@ -298,8 +292,7 @@
                  (mcp-discover client :protocol-version retry
                                :capabilities capabilities
                                :client-info client-info)))))
-         (unless (%fallback-to-legacy-p c)
-           (error c))
+         ;; Any other discover failure (FastMCP 3 uses -32602, not -32601) → initialize.
          (setf (mcp-client-era client) :legacy
                (mcp-client-protocol-version client) +mcp-legacy-protocol-version+)
          (%legacy-initialize client
