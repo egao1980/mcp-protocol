@@ -99,6 +99,32 @@
       (ok (equal "legacy"
                  (gethash "text" (elt (gethash "content" call) 0)))))))
 
+(deftest discover-fallback-invalid-params
+  "FastMCP 3 rejects server/discover with -32602, not -32601."
+  (let* ((server (%echo-server))
+         (transport (rpc-backend-inprocess:make-inprocess-rpc-transport))
+         (client (make-instance 'mcp-protocol:mcp-client
+                                :transport transport
+                                :era :unknown
+                                :name "test-client"
+                                :version "0.1.0")))
+    (rpc-protocol:rpc-serve
+     (lambda (method params)
+       (if (string= method "server/discover")
+           (error 'rpc-protocol:rpc-invalid-params
+                  :message "Invalid request parameters")
+           (handler-case
+               (mcp-protocol:dispatch-mcp-method server method params)
+             (mcp-protocol:mcp-error (c)
+               (error 'rpc-protocol:rpc-error
+                      :message (mcp-protocol:mcp-error-message c)
+                      :code (mcp-protocol:mcp-error-code c)
+                      :data (mcp-protocol:mcp-error-data c))))))
+     :transport transport)
+    (let ((init (mcp-protocol:mcp-initialize client)))
+      (ok (eq :legacy (mcp-protocol:mcp-client-era client)))
+      (ok (equal "2025-11-25" (gethash "protocolVersion" init))))))
+
 (deftest discover-fallback-to-legacy
   (let* ((server (%echo-server))
          (transport (rpc-backend-inprocess:make-inprocess-rpc-transport))

@@ -268,10 +268,10 @@
       (t (list raw)))))
 
 (defun %fallback-to-legacy-p (err)
-  (let ((code (mcp-error-code err)))
-    (or (eql code rpc-protocol:+method-not-found+)
-        (eql code rpc-protocol:+internal-error+)
-        (eql code +mcp-error-unsupported-protocol-version+))))
+  "Spec: any discover failure that is not a retryable -32022 → initialize.
+   FastMCP 3 / older SDKs reject server/discover with -32602, not -32601."
+  (declare (ignore err))
+  t)
 
 (defmethod mcp-initialize ((client mcp-client) &key protocol-version capabilities
                                                  client-info server-info)
