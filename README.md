@@ -38,7 +38,7 @@ Spec surface (GFs + CLOS). Backends may leave I/O unimplemented:
 | Sampling / elicitation / roots | `mcp-sampling-request`, `mcp-elicit-request`, `mcp-root`, `create-message`, `elicit`, `list-roots` |
 | MRTR | `mcp-input-required`, `request-sampling` / `request-elicitation` / `request-roots`, `fulfill-input-requests` |
 | Logging / progress | `mcp-log-message`, `mcp-progress`, `mcp-log`, `set-log-level`, `send-progress` |
-| Validation | `validate-json-schema` / `validate-tool-arguments` via `schema-protocol-json` |
+| Validation | `validate-json-schema` / `validate-tool-arguments` via `schema-protocol-json` **≥0.1.1** |
 
 OAuth stays transport-level (HTTP backend), not a protocol GF.
 
