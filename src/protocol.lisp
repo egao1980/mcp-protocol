@@ -85,7 +85,7 @@
 
 (defun tool-result (content &key is-error)
   (json-object "content" (if (listp content) (coerce content 'vector) content)
-               "isError" (if is-error t :false)))
+               "isError" (if is-error t :omit)))
 
 (defun %coerce-tool-result (value)
   (cond
@@ -172,6 +172,15 @@
       (setf (gethash "resultType" obj) "complete"))
     (when extra-meta
       (setf (gethash "_meta" obj) extra-meta)))
+  obj)
+
+(defun %with-cache (obj &key (ttl-ms +mcp-default-ttl-ms+) (scope "public"))
+  "SEP-2549 CacheableResult: ttlMs + cacheScope on list/read results."
+  (when (hash-table-p obj)
+    (unless (gethash "ttlMs" obj)
+      (setf (gethash "ttlMs" obj) ttl-ms))
+    (unless (gethash "cacheScope" obj)
+      (setf (gethash "cacheScope" obj) scope)))
   obj)
 
 ;;; --- registry -------------------------------------------------------------
@@ -437,18 +446,22 @@
                        :reason (param params "reason"))
            (json-object))
           ((string= method "tools/list")
-           (done (json-object "tools" (map 'vector #'%tool-json
-                                           (list-tools server :cursor (param params "cursor"))))))
+           (done (%with-cache
+                  (json-object "tools" (map 'vector #'%tool-json
+                                            (list-tools server :cursor (param params "cursor")))))))
           ((string= method "tools/call")
            (done (call-tool server (or (param params "name") (fail "missing tool name"))
                             (param params "arguments"))))
           ((string= method "resources/list")
-           (done (json-object "resources" (map 'vector #'%resource-json
-                                               (list-resources server :cursor (param params "cursor"))))))
+           (done (%with-cache
+                  (json-object "resources" (map 'vector #'%resource-json
+                                                (list-resources server :cursor (param params "cursor")))))))
           ((string= method "resources/read")
-           (done (read-resource server (or (param params "uri") (fail "missing uri")))))
+           (done (%with-cache
+                  (read-resource server (or (param params "uri") (fail "missing uri"))))))
           ((string= method "prompts/list")
-           (done (json-object "prompts" (map 'vector #'%prompt-json (list-prompts server)))))
+           (done (%with-cache
+                  (json-object "prompts" (map 'vector #'%prompt-json (list-prompts server))))))
           ((string= method "prompts/get")
            (done (get-prompt server (or (param params "name") (fail "missing prompt name"))
                              :arguments (param params "arguments"))))

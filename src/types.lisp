@@ -12,6 +12,9 @@
 (defconstant +mcp-error-unsupported-protocol-version+ -32022
   "JSON-RPC application error: UnsupportedProtocolVersion.")
 
+(defconstant +mcp-default-ttl-ms+ 60000
+  "SEP-2549 default freshness hint for static catalog / read results.")
+
 (defparameter *supported-protocol-versions*
   (list +mcp-protocol-version+ +mcp-legacy-protocol-version+)
   "Newest-first versions this implementation speaks.")

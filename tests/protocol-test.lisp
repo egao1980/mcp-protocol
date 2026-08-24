@@ -49,7 +49,7 @@
     (let ((result (mcp-protocol:call-tool server "echo"
                                           (mcp-protocol:json-object "msg" "hi"))))
       (ok (hash-table-p result))
-      (ok (equal :false (gethash "isError" result))))
+      (ok (null (gethash "isError" result))))
     (ok (search "hello"
                 (gethash "text"
                          (elt (gethash "contents"
@@ -148,6 +148,20 @@
     (let ((init (mcp-protocol:mcp-initialize client)))
       (ok (eq :legacy (mcp-protocol:mcp-client-era client)))
       (ok (equal "2025-11-25" (gethash "protocolVersion" init))))))
+
+(deftest modern-list-is-cacheable
+  "SEP-2549: tools/list (and other list/read results) need ttlMs + cacheScope."
+  (multiple-value-bind (client server)
+      (%wired)
+    (declare (ignore client))
+    (let ((raw (mcp-protocol:dispatch-mcp-method
+                server "tools/list"
+                (mcp-protocol:json-object
+                 "_meta" (mcp-protocol:json-object
+                          "io.modelcontextprotocol/protocolVersion" "2026-07-28")))))
+      (ok (equal "complete" (gethash "resultType" raw)))
+      (ok (eql mcp-protocol:+mcp-default-ttl-ms+ (gethash "ttlMs" raw)))
+      (ok (equal "public" (gethash "cacheScope" raw))))))
 
 (deftest unsupported-version-32022
   (multiple-value-bind (client server)
