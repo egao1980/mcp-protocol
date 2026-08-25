@@ -6,6 +6,7 @@
   :depends-on ("rpc-protocol"
                "schema-protocol"
                (:version "schema-protocol-json" "0.1.1"))
+  :properties (:cl-repo (:ci (:with ("dissect") :sources (("dissect" :ql)))))
   :serial t
   :pathname "src"
   :components ((:file "package")
