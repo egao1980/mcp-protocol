@@ -378,3 +378,35 @@
   (ok (signals (mcp-protocol:call-tool (%echo-server) "nope"
                                        (mcp-protocol:json-object))
                'mcp-protocol:mcp-unknown-tool)))
+
+(deftest unknown-tool-use-value
+  (let* ((server (%echo-server))
+         (echo (first (mcp-protocol:list-tools server)))
+         (result (handler-bind ((mcp-protocol:mcp-unknown-tool
+                                 (lambda (c)
+                                   (mcp-protocol:invoke-use-value echo c))))
+                   (mcp-protocol:call-tool server "nope"
+                                           (mcp-protocol:json-object "msg" "via")))))
+    (ok (hash-table-p result))
+    (ok (null (gethash "isError" result)))))
+
+(deftest unknown-tool-skip
+  (let ((result (handler-bind ((mcp-protocol:mcp-unknown-tool
+                                (lambda (c)
+                                  (mcp-protocol:invoke-skip c))))
+                  (mcp-protocol:call-tool (%echo-server) "nope"
+                                          (mcp-protocol:json-object)))))
+    (ok (eq t (gethash "isError" result)))))
+
+(deftest call-tool-use-value-result
+  (let ((got (handler-bind ((mcp-protocol:mcp-unknown-tool
+                             (lambda (c)
+                               (mcp-protocol:invoke-use-value
+                                (mcp-protocol:tool-result
+                                 (list (mcp-protocol:make-text-content "supplied")))
+                                c))))
+               (mcp-protocol:call-tool (%echo-server) "nope"
+                                       (mcp-protocol:json-object)))))
+    (ok (hash-table-p got))
+    (ok (equal "supplied"
+               (gethash "text" (elt (gethash "content" got) 0))))))

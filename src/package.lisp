@@ -26,6 +26,7 @@
    #:invoke-use-value
    #:invoke-provide-input
    #:invoke-decline-input
+   #:invoke-skip
    #:auto-retry
    #:auto-decline-input
    #:with-auto-retry

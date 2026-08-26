@@ -73,15 +73,17 @@
   (let ((r (find-restart 'decline-input condition)))
     (when r (invoke-restart r))))
 
+(defun invoke-skip (&optional condition)
+  (let ((r (find-restart 'skip condition)))
+    (when r (invoke-restart r))))
+
 (defun auto-retry (condition)
-  (if (find-restart 'retry condition)
-      (invoke-retry condition)
-      (error condition)))
+  (when (find-restart 'retry condition)
+    (invoke-retry condition)))
 
 (defun auto-decline-input (condition)
-  (if (find-restart 'decline-input condition)
-      (invoke-decline-input condition)
-      (error condition)))
+  (when (find-restart 'decline-input condition)
+    (invoke-decline-input condition)))
 
 (defmacro with-auto-retry (&body body)
   `(handler-bind ((mcp-error #'auto-retry))
