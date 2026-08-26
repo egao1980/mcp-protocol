@@ -14,6 +14,7 @@
    #:mcp-error-message
    #:mcp-error-code
    #:mcp-error-data
+   #:mcp-error-cause
    #:mcp-missing-backend
    #:mcp-unknown-tool
    #:mcp-unknown-tool-name

@@ -351,9 +351,9 @@
 (deftest provide-input-restart
   (let ((got (handler-bind ((mcp-protocol:mcp-input-required
                              (lambda (c)
-                               (mcp-protocol:invoke-provide-input
-                                (mcp-protocol:json-object "role" "assistant")
-                                c))))
+                               (invoke-restart
+                                'provide-input
+                                (mcp-protocol:json-object "role" "assistant")))))
                (mcp-protocol:request-sampling (mcp-protocol:json-object)))))
     (ok (hash-table-p got))
     (ok (equal "assistant" (gethash "role" got)))))
@@ -384,7 +384,7 @@
          (echo (first (mcp-protocol:list-tools server)))
          (result (handler-bind ((mcp-protocol:mcp-unknown-tool
                                  (lambda (c)
-                                   (mcp-protocol:invoke-use-value echo c))))
+                                   (use-value echo c))))
                    (mcp-protocol:call-tool server "nope"
                                            (mcp-protocol:json-object "msg" "via")))))
     (ok (hash-table-p result))
@@ -393,20 +393,7 @@
 (deftest unknown-tool-skip
   (let ((result (handler-bind ((mcp-protocol:mcp-unknown-tool
                                 (lambda (c)
-                                  (mcp-protocol:invoke-skip c))))
+                                  (invoke-restart 'skip))))
                   (mcp-protocol:call-tool (%echo-server) "nope"
                                           (mcp-protocol:json-object)))))
     (ok (eq t (gethash "isError" result)))))
-
-(deftest call-tool-use-value-result
-  (let ((got (handler-bind ((mcp-protocol:mcp-unknown-tool
-                             (lambda (c)
-                               (mcp-protocol:invoke-use-value
-                                (mcp-protocol:tool-result
-                                 (list (mcp-protocol:make-text-content "supplied")))
-                                c))))
-               (mcp-protocol:call-tool (%echo-server) "nope"
-                                       (mcp-protocol:json-object)))))
-    (ok (hash-table-p got))
-    (ok (equal "supplied"
-               (gethash "text" (elt (gethash "content" got) 0))))))

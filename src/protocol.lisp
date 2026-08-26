@@ -58,7 +58,8 @@
           (error 'mcp-error
                  :message (rpc-protocol:rpc-error-message c)
                  :code (rpc-protocol:rpc-error-code c)
-                 :data (rpc-protocol:rpc-error-data c)))))))
+                 :data (rpc-protocol:rpc-error-data c)
+                 :cause c)))))))
 
 (defun %rpc-notify (client method params)
   (with-mcp-restarts
@@ -69,7 +70,8 @@
         (error 'mcp-error
                :message (rpc-protocol:rpc-error-message c)
                :code (rpc-protocol:rpc-error-code c)
-               :data (rpc-protocol:rpc-error-data c))))))
+               :data (rpc-protocol:rpc-error-data c)
+               :cause c))))))
 
 (defun make-text-content (text)
   (json-object "type" "text" "text" (if (stringp text) text (princ-to-string text))))
@@ -404,10 +406,8 @@
                              :message (format nil "unknown tool ~s" name)
                              :code rpc-protocol:+invalid-params+)
                     (use-value (value)
-                      :report "Use a supplied tool or tool result"
-                      (if (typep value 'mcp-tool)
-                          value
-                          (return-from call-tool (%coerce-tool-result value))))
+                      :report "Use a supplied tool"
+                      value)
                     (skip ()
                       :report "Skip the unknown tool"
                       (return-from call-tool
