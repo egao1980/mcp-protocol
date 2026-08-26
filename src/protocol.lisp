@@ -59,7 +59,7 @@
                  :message (rpc-protocol:rpc-error-message c)
                  :code (rpc-protocol:rpc-error-code c)
                  :data (rpc-protocol:rpc-error-data c)
-                 :cause c)))))))
+                 :cause c))))))
 
 (defun %rpc-notify (client method params)
   (with-mcp-restarts
@@ -71,7 +71,7 @@
                :message (rpc-protocol:rpc-error-message c)
                :code (rpc-protocol:rpc-error-code c)
                :data (rpc-protocol:rpc-error-data c)
-               :cause c))))))
+               :cause c)))))
 
 (defun make-text-content (text)
   (json-object "type" "text" "text" (if (stringp text) text (princ-to-string text))))

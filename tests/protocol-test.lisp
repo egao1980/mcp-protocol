@@ -351,9 +351,9 @@
 (deftest provide-input-restart
   (let ((got (handler-bind ((mcp-protocol:mcp-input-required
                              (lambda (c)
-                               (invoke-restart
-                                'provide-input
-                                (mcp-protocol:json-object "role" "assistant")))))
+                               (mcp-protocol:invoke-provide-input
+                                (mcp-protocol:json-object "role" "assistant")
+                                c))))
                (mcp-protocol:request-sampling (mcp-protocol:json-object)))))
     (ok (hash-table-p got))
     (ok (equal "assistant" (gethash "role" got)))))
@@ -393,7 +393,7 @@
 (deftest unknown-tool-skip
   (let ((result (handler-bind ((mcp-protocol:mcp-unknown-tool
                                 (lambda (c)
-                                  (invoke-restart 'skip))))
+                                  (mcp-protocol:invoke-skip c))))
                   (mcp-protocol:call-tool (%echo-server) "nope"
                                           (mcp-protocol:json-object)))))
     (ok (eq t (gethash "isError" result)))))
