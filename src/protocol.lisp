@@ -8,7 +8,12 @@
 
 (defun %ensure-backend (&optional (backend *mcp-backend*))
   (or backend
-      (error 'mcp-error :message "*mcp-backend* is nil — load an mcp-backend-*")))
+      (restart-case
+          (error 'mcp-missing-backend
+                 :message "*mcp-backend* is nil — load an mcp-backend-*")
+        (use-value (value)
+          :report "Use a supplied MCP-BACKEND"
+          value))))
 
 (defun %client-transport (client)
   (or (mcp-client-transport client)
@@ -361,8 +366,9 @@
 (defmethod call-tool ((server mcp-server) name arguments &key)
   (let ((tool (gethash name (mcp-server-tools server))))
     (unless tool
-      (error 'mcp-error :message (format nil "unknown tool ~s" name)
-                        :code rpc-protocol:+invalid-params+))
+      (error 'mcp-unknown-tool :name name
+                              :message (format nil "unknown tool ~s" name)
+                              :code rpc-protocol:+invalid-params+))
     (validate-tool-arguments tool arguments)
     (let ((fn (mcp-tool-handler tool)))
       (unless fn

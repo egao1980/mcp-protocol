@@ -347,3 +347,34 @@
                      "_meta" (%modern-meta)))))
         (ok (eql 1 (length (gethash "tools" page2))))
         (ok (null (gethash "nextCursor" page2)))))))
+
+(deftest provide-input-restart
+  (let ((got (handler-bind ((mcp-protocol:mcp-input-required
+                             (lambda (c)
+                               (mcp-protocol:invoke-provide-input
+                                (mcp-protocol:json-object "role" "assistant")
+                                c))))
+               (mcp-protocol:request-sampling (mcp-protocol:json-object)))))
+    (ok (hash-table-p got))
+    (ok (equal "assistant" (gethash "role" got)))))
+
+(deftest unhandled-input-required-still-maps
+  (let ((server (%echo-server)))
+    (mcp-protocol:register-tool
+     server
+     (mcp-protocol:make-mcp-tool
+      "need-sample-2"
+      :input-schema (mcp-protocol:json-object "type" "object")
+      :handler (lambda (args)
+                 (declare (ignore args))
+                 (mcp-protocol:request-sampling (mcp-protocol:json-object)))))
+    (let ((raw (mcp-protocol:dispatch-mcp-method
+                server "tools/call"
+                (mcp-protocol:json-object "name" "need-sample-2"
+                                          "_meta" (%modern-meta)))))
+      (ok (equal "input_required" (gethash "resultType" raw))))))
+
+(deftest unknown-tool-typed
+  (ok (signals (mcp-protocol:call-tool (%echo-server) "nope"
+                                       (mcp-protocol:json-object))
+               'mcp-protocol:mcp-unknown-tool)))

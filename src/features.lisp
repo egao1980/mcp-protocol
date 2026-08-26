@@ -29,25 +29,25 @@
                "requestState" (or request-state :omit)))
 
 (defun request-sampling (params &key (id "sample") request-state)
-  (signal 'mcp-input-required
-          :input-requests
-          (json-object id (json-object "method" "sampling/createMessage"
-                                       "params" (or params (json-object))))
-          :request-state request-state))
+  (%signal-input-required
+   :input-requests
+   (json-object id (json-object "method" "sampling/createMessage"
+                                "params" (or params (json-object))))
+   :request-state request-state))
 
 (defun request-elicitation (params &key (id "elicit") request-state)
-  (signal 'mcp-input-required
-          :input-requests
-          (json-object id (json-object "method" "elicitation/create"
-                                       "params" (or params (json-object))))
-          :request-state request-state))
+  (%signal-input-required
+   :input-requests
+   (json-object id (json-object "method" "elicitation/create"
+                                "params" (or params (json-object))))
+   :request-state request-state))
 
 (defun request-roots (&key (id "roots") request-state)
-  (signal 'mcp-input-required
-          :input-requests
-          (json-object id (json-object "method" "roots/list"
-                                       "params" (json-object)))
-          :request-state request-state))
+  (%signal-input-required
+   :input-requests
+   (json-object id (json-object "method" "roots/list"
+                                "params" (json-object)))
+   :request-state request-state))
 
 (defgeneric register-resource-template (server template &key)
   (:method ((server mcp-server) (template mcp-resource-template) &key)

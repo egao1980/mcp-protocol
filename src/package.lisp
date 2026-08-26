@@ -14,9 +14,21 @@
    #:mcp-error-message
    #:mcp-error-code
    #:mcp-error-data
+   #:mcp-missing-backend
+   #:mcp-unknown-tool
+   #:mcp-unknown-tool-name
    #:mcp-input-required
    #:mcp-input-required-requests
    #:mcp-input-required-state
+   #:call-with-mcp-restarts
+   #:with-mcp-restarts
+   #:invoke-retry
+   #:invoke-use-value
+   #:invoke-provide-input
+   #:invoke-decline-input
+   #:auto-retry
+   #:auto-decline-input
+   #:with-auto-retry
    #:mcp-peer
    #:mcp-server
    #:mcp-client
