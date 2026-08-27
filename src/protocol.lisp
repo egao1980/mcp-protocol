@@ -8,7 +8,12 @@
 
 (defun %ensure-backend (&optional (backend *mcp-backend*))
   (or backend
-      (error 'mcp-error :message "*mcp-backend* is nil — load an mcp-backend-*")))
+      (restart-case
+          (error 'mcp-missing-backend
+                 :message "*mcp-backend* is nil — load an mcp-backend-*")
+        (use-value (value)
+          :report "Use a supplied MCP-BACKEND"
+          value))))
 
 (defun %client-transport (client)
   (or (mcp-client-transport client)
@@ -43,26 +48,30 @@
       (string= method "server/discover")))
 
 (defun %rpc-call (client method params)
-  (let ((params (if (%modern-wire-p client method)
-                    (%with-client-meta client params)
-                    (%ensure-params params))))
+  (with-mcp-restarts
+    (let ((params (if (%modern-wire-p client method)
+                      (%with-client-meta client params)
+                      (%ensure-params params))))
+      (handler-case
+          (rpc-protocol:rpc-call method params :transport (%client-transport client))
+        (rpc-protocol:rpc-error (c)
+          (error 'mcp-error
+                 :message (rpc-protocol:rpc-error-message c)
+                 :code (rpc-protocol:rpc-error-code c)
+                 :data (rpc-protocol:rpc-error-data c)
+                 :cause c))))))
+
+(defun %rpc-notify (client method params)
+  (with-mcp-restarts
     (handler-case
-        (rpc-protocol:rpc-call method params :transport (%client-transport client))
+        (rpc-protocol:rpc-notify method (%ensure-params params)
+                                 :transport (%client-transport client))
       (rpc-protocol:rpc-error (c)
         (error 'mcp-error
                :message (rpc-protocol:rpc-error-message c)
                :code (rpc-protocol:rpc-error-code c)
-               :data (rpc-protocol:rpc-error-data c))))))
-
-(defun %rpc-notify (client method params)
-  (handler-case
-      (rpc-protocol:rpc-notify method (%ensure-params params)
-                               :transport (%client-transport client))
-    (rpc-protocol:rpc-error (c)
-      (error 'mcp-error
-             :message (rpc-protocol:rpc-error-message c)
-             :code (rpc-protocol:rpc-error-code c)
-             :data (rpc-protocol:rpc-error-data c)))))
+               :data (rpc-protocol:rpc-error-data c)
+               :cause c)))))
 
 (defun make-text-content (text)
   (json-object "type" "text" "text" (if (stringp text) text (princ-to-string text))))
@@ -353,16 +362,59 @@
 (defgeneric list-prompts (peer &key))
 (defgeneric get-prompt (peer name &key arguments))
 
+(defmethod list-tools :around (peer &rest args)
+  (declare (ignore peer args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod call-tool :around (peer name arguments &rest args)
+  (declare (ignore peer name arguments args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod list-resources :around (peer &rest args)
+  (declare (ignore peer args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod read-resource :around (peer uri &rest args)
+  (declare (ignore peer uri args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod list-prompts :around (peer &rest args)
+  (declare (ignore peer args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod get-prompt :around (peer name &rest args)
+  (declare (ignore peer name args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod mcp-discover :around (peer &rest args)
+  (declare (ignore peer args))
+  (with-mcp-restarts (call-next-method)))
+
+(defmethod mcp-initialize :around (peer &rest args)
+  (declare (ignore peer args))
+  (with-mcp-restarts (call-next-method)))
+
 (defmethod list-tools ((server mcp-server) &key cursor)
   (declare (ignore cursor))
   (loop for tool being the hash-values of (mcp-server-tools server)
         collect tool))
 
 (defmethod call-tool ((server mcp-server) name arguments &key)
-  (let ((tool (gethash name (mcp-server-tools server))))
-    (unless tool
-      (error 'mcp-error :message (format nil "unknown tool ~s" name)
-                        :code rpc-protocol:+invalid-params+))
+  (let ((tool (or (gethash name (mcp-server-tools server))
+                  (restart-case
+                      (error 'mcp-unknown-tool :name name
+                             :message (format nil "unknown tool ~s" name)
+                             :code rpc-protocol:+invalid-params+)
+                    (use-value (value)
+                      :report "Use a supplied tool"
+                      value)
+                    (skip ()
+                      :report "Skip the unknown tool"
+                      (return-from call-tool
+                        (tool-result
+                         (list (make-text-content
+                                (format nil "unknown tool ~s" name)))
+                         :is-error t)))))))
     (validate-tool-arguments tool arguments)
     (let ((fn (mcp-tool-handler tool)))
       (unless fn
