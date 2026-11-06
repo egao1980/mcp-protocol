@@ -94,7 +94,10 @@
                "description" (mcp-tool-description tool)
                "inputSchema" (or (mcp-tool-input-schema tool)
                                  (json-object "type" "object"))
-               "outputSchema" (or (mcp-tool-output-schema tool) :omit)))
+               "outputSchema" (or (mcp-tool-output-schema tool) :omit)
+               ;; ToolAnnotations (readOnlyHint, destructiveHint, idempotentHint,
+               ;; openWorldHint, title): a JSON object passed through as given.
+               "annotations" (or (mcp-tool-annotations tool) :omit)))
 
 (defun %resource-json (res)
   (json-object "uri" (mcp-resource-uri res)
