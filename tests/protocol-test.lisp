@@ -397,3 +397,14 @@
                   (mcp-protocol:call-tool (%echo-server) "nope"
                                           (mcp-protocol:json-object)))))
     (ok (eq t (gethash "isError" result)))))
+
+(deftest tool-annotations-are-serialized
+  (let* ((tool (mcp-protocol:make-mcp-tool
+                "read" :handler (lambda (a) (declare (ignore a)) "ok")
+                       :annotations (mcp-protocol:json-object "readOnlyHint" t)))
+         (json (mcp-protocol::%tool-json tool)))
+    (ok (eq t (gethash "readOnlyHint" (gethash "annotations" json))))
+    (ok (null (nth-value 1 (gethash "annotations"
+                                    (mcp-protocol::%tool-json
+                                     (mcp-protocol:make-mcp-tool "plain" :handler #'identity)))))
+        "omitted when unset")))
