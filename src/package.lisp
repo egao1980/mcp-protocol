@@ -140,6 +140,17 @@
    #:notify-resources-list-changed
    #:notify-resources-updated
    #:notify-prompts-list-changed
+   #:*mcp-notifier*
+   #:*progress-token*
+   #:mcp-notify
+   #:mcp-server-notifier
+   #:mcp-server-resource-subscriptions
+   #:log-level-enabled-p
+   #:resource-subscribed-p
+   #:subscribe-resource
+   #:unsubscribe-resource
+   #:match-uri-template
+   #:mcp-resource-template-handler
    #:request-sampling
    #:request-elicitation
    #:request-roots

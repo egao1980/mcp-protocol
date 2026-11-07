@@ -1,5 +1,5 @@
 (defsystem "mcp-protocol"
-  :version "0.2.1"
+  :version "0.3.0"
   :description "CLOS MCP client/server protocol (2026-07-28 + 2025-11-25 dual-era)"
   :author "egao1980"
   :license "MIT"

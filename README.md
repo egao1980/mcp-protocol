@@ -32,12 +32,13 @@ Spec surface (GFs + CLOS). Backends may leave I/O unimplemented:
 | Area | Types / GFs |
 |------|-------------|
 | Tools / resources / prompts | `mcp-tool`, `mcp-resource`, `mcp-prompt`, `list-*`, `call-tool`, `read-resource`, `get-prompt` |
-| Resource templates | `mcp-resource-template`, `register-resource-template`, `list-resource-templates` |
+| Resource templates | `mcp-resource-template` (`:handler (lambda (uri vars) ...)` serves `resources/read` for matching URIs), `register-resource-template`, `list-resource-templates`, `match-uri-template` (`{var}`, `{+var}`) |
 | Completions | `mcp-completion-ref`, `complete` |
-| Subscriptions | `mcp-subscription`, `listen-subscriptions`, `notify-*-list-changed`, `notify-resources-updated` |
+| Subscriptions | `mcp-subscription`, `listen-subscriptions`, `subscribe-resource` / `unsubscribe-resource` (`resources/subscribe`), `notify-*-list-changed`, `notify-resources-updated` (sent only for subscribed URIs) |
 | Sampling / elicitation / roots | `mcp-sampling-request`, `mcp-elicit-request`, `mcp-root`, `create-message`, `elicit`, `list-roots` |
 | MRTR | `mcp-input-required`, `request-sampling` / `request-elicitation` / `request-roots`, `fulfill-input-requests` |
-| Logging / progress | `mcp-log-message`, `mcp-progress`, `mcp-log`, `set-log-level`, `send-progress` |
+| Logging / progress | `mcp-log-message`, `mcp-progress`, `mcp-log` (filtered by `set-log-level`), `send-progress` (uses the request's `_meta.progressToken`, bound as `*progress-token*`) |
+| Server → client notifications | `mcp-notify`; the backend supplies the path: `mcp-server-notifier` (any thread, set while serving stdio) or `*mcp-notifier*` (bound per request, e.g. HTTP SSE) |
 | Validation | `validate-json-schema` / `validate-tool-arguments` via `schema-protocol-json` **≥0.1.1** |
 
 OAuth stays transport-level (HTTP backend), not a protocol GF.

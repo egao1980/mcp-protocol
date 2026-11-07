@@ -408,3 +408,89 @@
                                     (mcp-protocol::%tool-json
                                      (mcp-protocol:make-mcp-tool "plain" :handler #'identity)))))
         "omitted when unset")))
+
+(deftest uri-template-matching
+  (ok (equal '(("id" . "42")) (mcp-protocol:match-uri-template "memo://{id}" "memo://42")))
+  (ok (null (mcp-protocol:match-uri-template "memo://{id}" "memo://a/b")))
+  (ok (equal '(("path" . "src/a b.lisp"))
+             (mcp-protocol:match-uri-template "src:///{+path}" "src:///src/a%20b.lisp")))
+  (ok (equal '(("conn" . "swank-1"))
+             (mcp-protocol:match-uri-template "repl://{conn}/output" "repl://swank-1/output")))
+  (ok (null (mcp-protocol:match-uri-template "repl://{conn}/output" "repl://x/input")))
+  (ok (eq t (mcp-protocol:match-uri-template "a://b" "a://b"))))
+
+(defun %notifying-server ()
+  (let* ((server (%echo-server))
+         (sent '()))
+    (setf (mcp-protocol:mcp-server-notifier server)
+          (lambda (method params) (push (cons method params) sent)))
+    (values server (lambda () (reverse sent)))))
+
+(deftest templated-read-and-subscriptions
+  (multiple-value-bind (server sent) (%notifying-server)
+    (mcp-protocol:register-resource-template
+     server
+     (mcp-protocol:make-mcp-resource-template
+      "memo://{id}/body" :name "memo" :mime-type "text/plain"
+      :handler (lambda (uri vars)
+                 (declare (ignore uri))
+                 (format nil "memo ~A" (cdr (assoc "id" vars :test #'string=))))))
+    (let* ((r (mcp-protocol:dispatch-mcp-method
+               server "resources/read" (mcp-protocol:json-object "uri" "memo://7/body")))
+           (c (elt (gethash "contents" r) 0)))
+      (ok (equal "memo 7" (gethash "text" c)))
+      (ok (equal "text/plain" (gethash "mimeType" c))))
+    (ok (signals (mcp-protocol:dispatch-mcp-method
+                  server "resources/read" (mcp-protocol:json-object "uri" "memo://7/other"))
+                 'mcp-protocol:mcp-error))
+    ;; not subscribed: nothing sent
+    (ok (null (mcp-protocol:notify-resources-updated server "memo://7/body")))
+    (mcp-protocol:dispatch-mcp-method server "resources/subscribe"
+                                      (mcp-protocol:json-object "uri" "memo://7/body"))
+    (ok (mcp-protocol:notify-resources-updated server "memo://7/body"))
+    (mcp-protocol:dispatch-mcp-method server "resources/unsubscribe"
+                                      (mcp-protocol:json-object "uri" "memo://7/body"))
+    (ok (null (mcp-protocol:notify-resources-updated server "memo://7/body")))
+    (let ((events (funcall sent)))
+      (ok (= 1 (length events)))
+      (ok (equal "notifications/resources/updated" (car (first events))))
+      (ok (equal "memo://7/body" (gethash "uri" (cdr (first events))))))))
+
+(deftest log-and-progress-notifications
+  (multiple-value-bind (server sent) (%notifying-server)
+    (mcp-protocol:mcp-log server "debug" "noise")
+    (mcp-protocol:set-log-level server "warning")
+    (mcp-protocol:mcp-log server "info" "dropped")
+    (mcp-protocol:mcp-log server "error" "kept" :logger "test")
+    ;; progress without a token is not sent
+    (mcp-protocol:send-progress server 1)
+    (mcp-protocol:register-tool
+     server
+     (mcp-protocol:make-mcp-tool
+      "slow" :input-schema (mcp-protocol:json-object "type" "object")
+      :handler (lambda (args)
+                 (declare (ignore args))
+                 (mcp-protocol:send-progress server 1 :total 2 :message "half")
+                 "done")))
+    (mcp-protocol:dispatch-mcp-method
+     server "tools/call"
+     (mcp-protocol:json-object "name" "slow" "arguments" (mcp-protocol:json-object)
+                               "_meta" (mcp-protocol:json-object "progressToken" "tok-1")))
+    ;; a client progress notification is not echoed back
+    (mcp-protocol:dispatch-mcp-method
+     server "notifications/progress" (mcp-protocol:json-object "progressToken" "x" "progress" 1))
+    (let ((events (funcall sent)))
+      (ok (equal '("notifications/message" "notifications/message" "notifications/progress")
+                 (mapcar #'car events)))
+      (ok (equal "noise" (gethash "data" (cdr (first events)))))
+      (ok (equal "test" (gethash "logger" (cdr (second events)))))
+      (ok (equal "tok-1" (gethash "progressToken" (cdr (third events)))))
+      (ok (= 2 (gethash "total" (cdr (third events))))))))
+
+(deftest dynamic-notifier-wins
+  (multiple-value-bind (server sent) (%notifying-server)
+    (let ((local '()))
+      (let ((mcp-protocol:*mcp-notifier* (lambda (m p) (declare (ignore p)) (push m local))))
+        (mcp-protocol:notify-tools-list-changed server))
+      (ok (equal '("notifications/tools/list_changed") local))
+      (ok (null (funcall sent))))))
