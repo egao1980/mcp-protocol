@@ -436,19 +436,29 @@
   (loop for res being the hash-values of (mcp-server-resources server)
         collect res))
 
+(defun %resource-contents (uri text mime-type)
+  (json-object "contents"
+               (vector (json-object "uri" uri
+                                    "mimeType" (or mime-type :omit)
+                                    "text" (if (stringp text) text (princ-to-string text))))))
+
+(defun %read-templated-resource (server uri)
+  "Read URI through the first registered template that matches it and has a handler."
+  (loop for tmpl being the hash-values of (mcp-server-resource-templates server)
+        for fn = (mcp-resource-template-handler tmpl)
+        for vars = (and fn (match-uri-template (mcp-resource-template-uri tmpl) uri))
+        when vars
+          do (multiple-value-bind (text mime) (funcall fn uri (if (listp vars) vars '()))
+               (return (%resource-contents uri text (or mime (mcp-resource-template-mime-type tmpl)))))))
+
 (defmethod read-resource ((server mcp-server) uri &key)
   (let ((res (gethash uri (mcp-server-resources server))))
-    (unless res
-      (error 'mcp-error :message (format nil "unknown resource ~s" uri)
-                        :code rpc-protocol:+invalid-params+))
-    (let* ((fn (mcp-resource-handler res))
-           (body (if fn (funcall fn res) "")))
-      (json-object "contents"
-                   (vector (json-object "uri" uri
-                                        "mimeType" (mcp-resource-mime-type res)
-                                        "text" (if (stringp body)
-                                                   body
-                                                   (princ-to-string body))))))))
+    (cond (res
+           (let ((fn (mcp-resource-handler res)))
+             (%resource-contents uri (if fn (funcall fn res) "") (mcp-resource-mime-type res))))
+          ((%read-templated-resource server uri))
+          (t (error 'mcp-error :message (format nil "unknown resource ~s" uri)
+                               :code rpc-protocol:+invalid-params+)))))
 
 (defmethod list-prompts ((server mcp-server) &key)
   (loop for p being the hash-values of (mcp-server-prompts server)
@@ -587,15 +597,13 @@
                            :request-id (param params "requestId")
                            :reason (param params "reason"))
                (json-object))
+              ;; client-to-server notifications: accepted, never echoed back
               ((string= method "notifications/progress")
-               (send-progress server (param params "progress")
-                              :progress-token (param params "progressToken")
-                              :total (param params "total")
-                              :message (param params "message"))
                (json-object))
               ((string= method "notifications/message")
-               (mcp-log server (param params "level") (param params "data")
-                        :logger (param params "logger"))
+               (%check-log-level (param params "level"))
+               (json-object))
+              ((string= method "notifications/roots/list_changed")
                (json-object))
               ((string= method "tools/list")
                (multiple-value-bind (vec next)
@@ -604,8 +612,13 @@
                  (done (%with-cache
                         (json-object "tools" vec "nextCursor" (or next :omit))))))
               ((string= method "tools/call")
-               (done (call-tool server (or (param params "name") (fail "missing tool name"))
-                                (param params "arguments"))))
+               (let ((*progress-token* (param (param params "_meta") "progressToken")))
+                 (done (call-tool server (or (param params "name") (fail "missing tool name"))
+                                  (param params "arguments")))))
+              ((string= method "resources/subscribe")
+               (done (subscribe-resource server (or (param params "uri") (fail "missing uri")))))
+              ((string= method "resources/unsubscribe")
+               (done (unsubscribe-resource server (or (param params "uri") (fail "missing uri")))))
               ((string= method "resources/list")
                (multiple-value-bind (vec next)
                    (%paged-catalog (list-resources server :cursor (param params "cursor"))

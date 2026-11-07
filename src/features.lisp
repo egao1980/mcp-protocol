@@ -140,12 +140,41 @@
   (:method ((server mcp-server) &key)
     (%not-implemented "roots/list on server")))
 
+(defvar *mcp-notifier* nil
+  "Function (METHOD PARAMS) a backend binds for one request, so notifications sent
+while handling it travel with the response (an HTTP SSE stream). Takes precedence
+over MCP-SERVER-NOTIFIER.")
+
+(defvar *progress-token* nil
+  "progressToken from _meta of the request being handled, or NIL.")
+
+(defun mcp-notify (server method params)
+  "Send notification METHOD with PARAMS to the client of SERVER.
+T when sent; NIL when the current transport has no path for it."
+  (let ((fn (or *mcp-notifier* (mcp-server-notifier server))))
+    (when fn
+      (funcall fn method params)
+      t)))
+
+(defun %check-log-level (level)
+  (unless (member level *mcp-log-levels* :test #'string=)
+    (error 'mcp-error :message (format nil "invalid log level ~s" level)
+                      :code rpc-protocol:+invalid-params+)))
+
+(defun log-level-enabled-p (server level)
+  "True when LEVEL is at or above the level the client set (all levels by default)."
+  (let ((min (mcp-server-log-level server)))
+    (or (null min)
+        (>= (position level *mcp-log-levels* :test #'string=)
+            (position min *mcp-log-levels* :test #'string=)))))
+
 (defgeneric mcp-log (peer level data &key logger)
   (:documentation "Emit notifications/message. Deprecated (SEP-2577); kept for the lifecycle window.")
   (:method ((server mcp-server) level data &key logger)
-    (unless (member level *mcp-log-levels* :test #'string=)
-      (error 'mcp-error :message (format nil "invalid log level ~s" level)
-                        :code rpc-protocol:+invalid-params+))
+    (%check-log-level level)
+    (when (log-level-enabled-p server level)
+      (mcp-notify server "notifications/message"
+                  (json-object "level" level "logger" (or logger :omit) "data" data)))
     (make-mcp-log-message level data :logger logger))
   (:method ((client mcp-client) level data &key logger)
     (let ((fn (mcp-client-log-handler client)))
@@ -156,16 +185,20 @@
 (defgeneric set-log-level (peer level &key)
   (:documentation "Legacy logging/setLevel (pre-2026 per-request logLevel).")
   (:method ((server mcp-server) level &key)
-    (unless (member level *mcp-log-levels* :test #'string=)
-      (error 'mcp-error :message (format nil "invalid log level ~s" level)
-                        :code rpc-protocol:+invalid-params+))
+    (%check-log-level level)
     (setf (mcp-server-log-level server) level)
     (json-object)))
 
 (defgeneric send-progress (peer progress &key progress-token total message)
+  (:documentation "notifications/progress for PROGRESS-TOKEN (default: the token of the
+request being handled). Without a token nothing is sent.")
   (:method ((server mcp-server) progress &key progress-token total message)
-    (make-mcp-progress (or progress-token "progress") progress
-                       :total total :message message))
+    (let ((token (or progress-token *progress-token*)))
+      (when token
+        (mcp-notify server "notifications/progress"
+                    (json-object "progressToken" token "progress" progress
+                                 "total" (or total :omit) "message" (or message :omit))))
+      (make-mcp-progress (or token "progress") progress :total total :message message)))
   (:method ((client mcp-client) progress &key progress-token total message)
     (let ((fn (mcp-client-progress-handler client)))
       (when fn
@@ -174,18 +207,126 @@
       t)))
 
 (defgeneric notify-tools-list-changed (peer &key)
-  (:method ((server mcp-server) &key) t))
+  (:method ((server mcp-server) &key)
+    (mcp-notify server "notifications/tools/list_changed" (json-object))))
 
 (defgeneric notify-resources-list-changed (peer &key)
-  (:method ((server mcp-server) &key) t))
+  (:method ((server mcp-server) &key)
+    (mcp-notify server "notifications/resources/list_changed" (json-object))))
+
+(defun resource-subscribed-p (server uri)
+  "True when URI was subscribed with resources/subscribe or subscriptions/listen."
+  (or (gethash uri (mcp-server-resource-subscriptions server))
+      (loop for sub being the hash-values of (mcp-server-subscriptions server)
+              thereis (member uri (mcp-subscription-resource-uris sub) :test #'equal))))
 
 (defgeneric notify-resources-updated (peer uri &key)
+  (:documentation "notifications/resources/updated, sent only when URI is subscribed.")
   (:method ((server mcp-server) uri &key)
-    (declare (ignore uri))
-    t))
+    (and (resource-subscribed-p server uri)
+         (mcp-notify server "notifications/resources/updated" (json-object "uri" uri)))))
 
 (defgeneric notify-prompts-list-changed (peer &key)
-  (:method ((server mcp-server) &key) t))
+  (:method ((server mcp-server) &key)
+    (mcp-notify server "notifications/prompts/list_changed" (json-object))))
+
+(defgeneric subscribe-resource (peer uri &key)
+  (:documentation "resources/subscribe (2025-11-25 era).")
+  (:method ((server mcp-server) uri &key)
+    (setf (gethash uri (mcp-server-resource-subscriptions server)) t)
+    (json-object)))
+
+(defgeneric unsubscribe-resource (peer uri &key)
+  (:documentation "resources/unsubscribe (2025-11-25 era).")
+  (:method ((server mcp-server) uri &key)
+    (remhash uri (mcp-server-resource-subscriptions server))
+    (json-object)))
+
+;;; URI templates (RFC 6570 level 1 and 2 shapes: {var} and {+var})
+
+(defun %parse-uri-template (template)
+  "List of literal strings and (:var name reserved-p) parts."
+  (let ((parts '()) (start 0))
+    (loop for open = (position #\{ template :start start)
+          while open
+          do (let ((close (or (position #\} template :start open)
+                              (error 'mcp-error :message (format nil "bad URI template ~s" template)
+                                                :code rpc-protocol:+invalid-params+))))
+               (when (> open start) (push (subseq template start open) parts))
+               (let* ((name (subseq template (1+ open) close))
+                      (reserved (and (plusp (length name)) (char= (char name 0) #\+))))
+                 (push (list :var (if reserved (subseq name 1) name) reserved) parts))
+               (setf start (1+ close))))
+    (when (< start (length template)) (push (subseq template start) parts))
+    (nreverse parts)))
+
+(defun %utf-8-encode-char (c out)
+  (let ((code (char-code c)))
+    (cond ((< code #x80) (vector-push-extend code out))
+          ((< code #x800)
+           (vector-push-extend (logior #xC0 (ash code -6)) out)
+           (vector-push-extend (logior #x80 (logand code #x3F)) out))
+          ((< code #x10000)
+           (vector-push-extend (logior #xE0 (ash code -12)) out)
+           (vector-push-extend (logior #x80 (logand (ash code -6) #x3F)) out)
+           (vector-push-extend (logior #x80 (logand code #x3F)) out))
+          (t
+           (vector-push-extend (logior #xF0 (ash code -18)) out)
+           (vector-push-extend (logior #x80 (logand (ash code -12) #x3F)) out)
+           (vector-push-extend (logior #x80 (logand (ash code -6) #x3F)) out)
+           (vector-push-extend (logior #x80 (logand code #x3F)) out)))))
+
+(defun %utf-8-decode (octets)
+  "Decode OCTETS; a malformed sequence decodes byte by byte as Latin-1."
+  (with-output-to-string (s)
+    (loop with i = 0 with n = (length octets)
+          while (< i n)
+          do (let* ((b (aref octets i))
+                    (len (cond ((< b #x80) 1) ((= (logand b #xE0) #xC0) 2)
+                               ((= (logand b #xF0) #xE0) 3) ((= (logand b #xF8) #xF0) 4) (t 0))))
+               (if (and (> len 1) (<= (+ i len) n)
+                        (loop for k from 1 below len always (= (logand (aref octets (+ i k)) #xC0) #x80)))
+                   (let ((code (logand b (ash #xFF (- (1+ len))))))
+                     (loop for k from 1 below len
+                           do (setf code (logior (ash code 6) (logand (aref octets (+ i k)) #x3F))))
+                     (write-char (code-char code) s)
+                     (incf i len))
+                   (progn (write-char (code-char b) s) (incf i)))))))
+
+(defun %percent-decode (string)
+  (if (not (find #\% string))
+      string
+      (let ((octets (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
+        (loop with i = 0
+              while (< i (length string))
+              do (let ((c (char string i)))
+                   (if (and (char= c #\%) (<= (+ i 3) (length string))
+                            (digit-char-p (char string (+ i 1)) 16)
+                            (digit-char-p (char string (+ i 2)) 16))
+                       (progn (vector-push-extend (parse-integer string :start (1+ i) :end (+ i 3) :radix 16) octets)
+                              (incf i 3))
+                       (progn (%utf-8-encode-char c octets) (incf i)))))
+        (%utf-8-decode octets))))
+
+(defun match-uri-template (template uri)
+  "Alist of (name . value) when URI matches TEMPLATE, else NIL (a match with no
+variables returns T). {var} matches no /, {+var} matches anything."
+  (labels ((walk (parts pos acc)
+             (cond ((null parts)
+                    (and (= pos (length uri)) (or (reverse acc) t)))
+                   ((stringp (first parts))
+                    (let* ((lit (first parts)) (end (+ pos (length lit))))
+                      (and (<= end (length uri)) (string= lit uri :start2 pos :end2 end)
+                           (walk (rest parts) end acc))))
+                   (t
+                    (destructuring-bind (name reserved) (rest (first parts))
+                      (loop for end from (length uri) downto (1+ pos)
+                            for value = (subseq uri pos end)
+                            when (or reserved (not (find #\/ value)))
+                              do (let ((m (walk (rest parts) end
+                                                (acons name (%percent-decode value) acc))))
+                                   (when m (return m)))))))))
+    (walk (%parse-uri-template template) 0 '())))
 
 (defgeneric fulfill-input-requests (peer input-requests &key)
   (:method ((client mcp-client) input-requests &key)

@@ -129,7 +129,14 @@
                  :initform nil)
    (log-level :initarg :log-level :accessor mcp-server-log-level :initform nil)
    (subscriptions :initarg :subscriptions :accessor mcp-server-subscriptions
-                  :initform (make-hash-table :test 'equal))))
+                  :initform (make-hash-table :test 'equal))
+   (resource-subscriptions :accessor mcp-server-resource-subscriptions
+                           :initform (make-hash-table :test 'equal)
+                           :documentation "URIs subscribed with resources/subscribe.")
+   (notifier :initarg :notifier :accessor mcp-server-notifier :initform nil
+             :documentation "Function (METHOD PARAMS) that sends a notification to the
+client outside any request. Set by a backend while it serves (stdio); NIL when the
+transport has no such path.")))
 
 (defclass mcp-client (mcp-peer)
   ((transport :initarg :transport :accessor mcp-client-transport :initform nil)
@@ -192,7 +199,11 @@
                 :initform nil)
    (icons :initarg :icons :accessor mcp-resource-template-icons :initform nil)
    (complete :initarg :complete :accessor mcp-resource-template-complete
-             :initform nil)))
+             :initform nil)
+   (handler :initarg :handler :accessor mcp-resource-template-handler :initform nil
+            :documentation "Function (URI VARIABLES) for resources/read of a URI that
+matches the template. VARIABLES is an alist of (name . value). Returns the text, or
+the text and a mime type as two values.")))
 
 (defclass mcp-prompt ()
   ((name :initarg :name :accessor mcp-prompt-name)
@@ -309,7 +320,7 @@
 
 (defun make-mcp-resource-template (uri-template &key name title description
                                                   mime-type annotations icons
-                                                  complete)
+                                                  complete handler)
   (make-instance 'mcp-resource-template
                  :uri-template uri-template
                  :name (or name uri-template)
@@ -318,7 +329,8 @@
                  :mime-type mime-type
                  :annotations annotations
                  :icons icons
-                 :complete complete))
+                 :complete complete
+                 :handler handler))
 
 (defun make-mcp-prompt (name &key description title arguments icons complete handler)
   (make-instance 'mcp-prompt
