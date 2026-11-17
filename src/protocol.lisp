@@ -418,6 +418,7 @@
                          (list (make-text-content
                                 (format nil "unknown tool ~s" name)))
                          :is-error t)))))))
+    (setf arguments (repair-tool-arguments tool arguments))
     (validate-tool-arguments tool arguments)
     (let ((fn (mcp-tool-handler tool)))
       (unless fn
