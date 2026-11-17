@@ -256,6 +256,43 @@
                                          (mcp-protocol:json-object))
                  'mcp-protocol:mcp-error))))
 
+(deftest argument-repair-before-validation
+  (let ((server (%echo-server)) (seen nil))
+    (mcp-protocol:register-tool
+     server
+     (mcp-protocol:make-mcp-tool
+      "typed"
+      :input-schema (mcp-protocol:json-object
+                     "type" "object"
+                     "required" (vector "expected_hash")
+                     "properties"
+                     (mcp-protocol:json-object
+                      "expected_hash" (mcp-protocol:json-object "type" "string")
+                      "dry_run" (mcp-protocol:json-object "type" "boolean")
+                      "limit" (mcp-protocol:json-object "type" "integer")
+                      "ratio" (mcp-protocol:json-object "type" "number")
+                      "id" (mcp-protocol:json-object "type" "string")
+                      "mode" (mcp-protocol:json-object "type" "boolean")))
+      :handler (lambda (args)
+                 (setf seen args)
+                 (mcp-protocol:tool-result (list (mcp-protocol:make-text-content "ok"))))))
+    (mcp-protocol:call-tool server "typed"
+                            (mcp-protocol:json-object "expectedHash" "abc" "dry-run" "false"
+                                                      "limit" "20" "ratio" "-1.5" "id" 3))
+    (ok (equal "abc" (gethash "expected_hash" seen)))
+    (ok (null (nth-value 1 (gethash "expectedHash" seen))))
+    (ok (multiple-value-bind (v present) (gethash "dry_run" seen) (and present (null v))))
+    (ok (eql 20 (gethash "limit" seen)))
+    (ok (= -1.5d0 (gethash "ratio" seen)))
+    (ok (equal "3" (gethash "id" seen)))
+    ;; no single reading: left alone, so validation still rejects it
+    (ok (signals (mcp-protocol:call-tool server "typed"
+                                         (mcp-protocol:json-object "expected_hash" "a" "mode" "maybe"))
+                 'mcp-protocol:mcp-error))
+    (ok (signals (mcp-protocol:call-tool server "typed"
+                                         (mcp-protocol:json-object "expected_hash" "a" "limit" "1.5"))
+                 'mcp-protocol:mcp-error))))
+
 (deftest templates-complete-listen-log
   (multiple-value-bind (client server)
       (%wired)

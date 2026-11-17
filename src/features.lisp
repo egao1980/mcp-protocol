@@ -381,6 +381,84 @@ variables returns T). {var} matches no /, {+var} matches anything."
              :code rpc-protocol:+invalid-params+
              :data (json-object "reason" "inputSchema")))))
 
+;;; Argument repair (before validation). Models carry habits over from other
+;;; tools: "false" for false, "20" for 20, expectedHash for expected_hash.
+;;; Where the input schema allows only one reading, fix it instead of failing
+;;; the call and spending a turn.
+
+(defun %name-variants (name)
+  "NAME's other spellings: snake_case, camelCase and kebab-case."
+  (let* ((words (let ((out '()) (word (make-string-output-stream)))
+                  (flet ((flush () (let ((w (get-output-stream-string word)))
+                                     (when (plusp (length w)) (push w out)))))
+                    (loop for c across name
+                          do (cond ((member c '(#\_ #\-)) (flush))
+                                   ((upper-case-p c) (flush) (write-char (char-downcase c) word))
+                                   (t (write-char c word))))
+                    (flush))
+                  (nreverse out))))
+    (remove name
+            (remove-duplicates
+             (list (format nil "~{~A~^_~}" words)
+                   (format nil "~A~{~:(~A~)~}" (first words) (rest words))
+                   (format nil "~{~A~^-~}" words))
+             :test #'string=)
+            :test #'string=)))
+
+(defun %repair-scalar (type value)
+  "VALUE coerced to JSON Schema TYPE when it has one unambiguous reading, else VALUE."
+  (flet ((numeric (v)
+           ;; "12", "-3", "1.5": an integer or a decimal, nothing else
+           (let* ((s (string-trim " " v))
+                  (dot (position #\. s)))
+             (multiple-value-bind (whole end) (parse-integer s :end dot :junk-allowed t)
+               (cond ((null whole) nil)
+                     ((and (null dot) (= end (length s))) whole)
+                     ((and dot (= end dot) (< (1+ dot) (length s))
+                           (every #'digit-char-p (subseq s (1+ dot))))
+                      (let ((fraction (/ (parse-integer s :start (1+ dot)) (expt 10 (- (length s) dot 1)))))
+                        (float (if (char= (char s 0) #\-) (- whole fraction) (+ whole fraction)) 1d0)))
+                     (t nil))))))
+    (cond ((and (equal type "boolean") (stringp value))
+           (let ((s (string-downcase (string-trim " " value))))
+             (cond ((member s '("true" "1" "yes") :test #'string=) t)
+                   ((member s '("false" "0" "no") :test #'string=) nil)
+                   (t value))))
+          ((and (equal type "integer") (stringp value))
+           (let ((n (numeric value))) (if (and n (= n (round n))) (round n) value)))
+          ((and (equal type "number") (stringp value))
+           (or (numeric value) value))
+          ((and (equal type "string") (realp value))
+           (princ-to-string value))
+          (t value))))
+
+(defgeneric repair-tool-arguments (tool arguments)
+  (:documentation "ARGUMENTS (a JSON object) with common model mistakes fixed
+where TOOL's input schema allows one reading: a property given under another
+spelling of its name (camelCase, snake_case, kebab-case) is renamed, and a
+string for a boolean / integer / number property (or a number for a string
+one) is coerced. Runs before validation; returns the (possibly new) object.")
+  (:method (tool arguments)
+    (let* ((schema (mcp-tool-input-schema tool))
+           (props (and (hash-table-p schema) (gethash "properties" schema))))
+      (if (not (and (hash-table-p props) (hash-table-p arguments)))
+          arguments
+          (let ((fixed (make-hash-table :test (hash-table-test arguments))))
+            (maphash (lambda (k v) (setf (gethash k fixed) v)) arguments)
+            (maphash (lambda (name spec)
+                       (unless (nth-value 1 (gethash name fixed))
+                         (let ((alias (find-if (lambda (v) (and (nth-value 1 (gethash v fixed))
+                                                                (not (nth-value 1 (gethash v props)))))
+                                               (%name-variants name))))
+                           (when alias
+                             (setf (gethash name fixed) (gethash alias fixed))
+                             (remhash alias fixed))))
+                       (multiple-value-bind (value present) (gethash name fixed)
+                         (when (and present (hash-table-p spec))
+                           (setf (gethash name fixed) (%repair-scalar (gethash "type" spec) value)))))
+                     props)
+            fixed)))))
+
 (defun validate-tool-arguments (tool arguments)
   (let ((schema (mcp-tool-input-schema tool)))
     (unless (or (mcp-tool-compiled-input-schema tool)

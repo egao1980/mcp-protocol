@@ -158,6 +158,7 @@
    #:input-required-result
    #:validate-json-schema
    #:validate-tool-arguments
+   #:repair-tool-arguments
    #:require-client-capability
    #:missing-client-capability
    #:dispatch-mcp-method

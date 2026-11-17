@@ -40,6 +40,7 @@ Spec surface (GFs + CLOS). Backends may leave I/O unimplemented:
 | Logging / progress | `mcp-log-message`, `mcp-progress`, `mcp-log` (filtered by `set-log-level`), `send-progress` (uses the request's `_meta.progressToken`, bound as `*progress-token*`) |
 | Server → client notifications | `mcp-notify`; the backend supplies the path: `mcp-server-notifier` (any thread, set while serving stdio) or `*mcp-notifier*` (bound per request, e.g. HTTP SSE) |
 | Validation | `validate-json-schema` / `validate-tool-arguments` via `schema-protocol-json` **≥0.1.1** |
+| Argument repair | `repair-tool-arguments` (GF) runs before validation: a property under another spelling (camelCase / snake_case / kebab-case) is renamed; `"false"` / `"20"` / `"1.5"` for boolean / integer / number and a number for a string are coerced. Anything with more than one reading is left for validation to reject |
 
 OAuth stays transport-level (HTTP backend), not a protocol GF.
 
