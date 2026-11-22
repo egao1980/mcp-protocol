@@ -227,3 +227,23 @@ transport handlers come from MCP-CLIENT-TRANSPORT-HANDLERS."
     (let ((result (mcp-protocol:call-tool client "read_file" (%obj) :timeout 5)))
       (ok (equal "contents" (gethash "text" (elt (gethash "content" result) 0)))))
     (ok (null (recording-server-cancels server)))))
+
+(deftest client-handler-payload-readers-exported
+  "0.4.1: a log or progress handler reads what it gets with exported readers."
+  (let* ((logs '()) (progress '())
+         (client (make-instance 'mcp-protocol:mcp-client
+                                :log-handler (lambda (m) (push m logs))
+                                :progress-handler (lambda (p) (push p progress)))))
+    (mcp-protocol:mcp-client-handle-notification
+     client "notifications/message" (%obj "level" "warning" "logger" "srv" "data" "careful"))
+    (mcp-protocol:mcp-client-handle-notification
+     client "notifications/progress" (%obj "progressToken" "t1" "progress" 1 "total" 4 "message" "a quarter"))
+    (let ((m (first logs)))
+      (ok (equal "warning" (mcp-protocol:mcp-log-message-level m)))
+      (ok (equal "srv" (mcp-protocol:mcp-log-message-logger m)))
+      (ok (equal "careful" (mcp-protocol:mcp-log-message-data m))))
+    (let ((p (first progress)))
+      (ok (equal "t1" (mcp-protocol:mcp-progress-token p)))
+      (ok (eql 1 (mcp-protocol:mcp-progress-value p)))
+      (ok (eql 4 (mcp-protocol:mcp-progress-total p)))
+      (ok (equal "a quarter" (mcp-protocol:mcp-progress-message p))))))

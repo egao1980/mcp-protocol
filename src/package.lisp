@@ -191,7 +191,15 @@
    #:mcp-timeout-method
    #:mcp-timeout-seconds
    #:mcp-timeout-request-id
-   #:mcp-pagination-error)
+   #:mcp-pagination-error
+   ;; 0.4.1: the readers of what the log and progress handlers get
+   #:mcp-log-message-level
+   #:mcp-log-message-logger
+   #:mcp-log-message-data
+   #:mcp-progress-token
+   #:mcp-progress-value
+   #:mcp-progress-total
+   #:mcp-progress-message)
   (:documentation
    "MCP dual-era protocol: modern 2026-07-28 (stateless _meta + server/discover)
     and legacy 2025-11-25 (initialize handshake). JSON-RPC via rpc-protocol.
