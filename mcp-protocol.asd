@@ -1,11 +1,12 @@
 (defsystem "mcp-protocol"
-  :version "0.3.1"
+  :version "0.3.2"
   :description "CLOS MCP client/server protocol (2026-07-28 + 2025-11-25 dual-era)"
   :author "egao1980"
   :license "MIT"
   :depends-on ("rpc-protocol"
                "schema-protocol"
-               (:version "schema-protocol-json" "0.1.1"))
+               (:version "schema-protocol-json" "0.1.1")
+               (:version "encoding-protocol" "0.3.0"))
   :properties (:cl-repo (:ci (:with ("dissect"))))
   :serial t
   :pathname "src"
