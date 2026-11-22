@@ -172,7 +172,26 @@
    #:mcp-serve
    #:backend-mcp-connect
    #:backend-mcp-serve
-   #:use-mcp-backend)
+   #:use-mcp-backend
+   ;; 0.4.0 (#14): the client side
+   #:mcp-tool-icons
+   #:mcp-tool-meta
+   #:mcp-tool-annotation
+   #:mcp-tool-read-only-p
+   #:mcp-tool-visible-to-model-p
+   #:list-all-tools
+   #:+max-tool-pages+
+   #:mcp-client-tools-generation
+   #:mcp-client-on-tools-changed
+   #:mcp-client-notification-hook
+   #:mcp-client-handle-notification
+   #:mcp-client-handle-request
+   #:mcp-client-transport-handlers
+   #:mcp-timeout
+   #:mcp-timeout-method
+   #:mcp-timeout-seconds
+   #:mcp-timeout-request-id
+   #:mcp-pagination-error)
   (:documentation
    "MCP dual-era protocol: modern 2026-07-28 (stateless _meta + server/discover)
     and legacy 2025-11-25 (initialize handshake). JSON-RPC via rpc-protocol.

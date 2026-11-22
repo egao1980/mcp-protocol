@@ -97,7 +97,10 @@
                "outputSchema" (or (mcp-tool-output-schema tool) :omit)
                ;; ToolAnnotations (readOnlyHint, destructiveHint, idempotentHint,
                ;; openWorldHint, title): a JSON object passed through as given.
-               "annotations" (or (mcp-tool-annotations tool) :omit)))
+               "annotations" (or (mcp-tool-annotations tool) :omit)
+               ;; 0.4.0 (#14, given): icons and _meta go out as given.
+               "icons" (or (mcp-tool-icons tool) :omit)
+               "_meta" (or (mcp-tool-meta tool) :omit)))
 
 (defun %resource-json (res)
   (json-object "uri" (mcp-resource-uri res)
