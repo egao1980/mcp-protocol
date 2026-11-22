@@ -260,60 +260,40 @@ request being handled). Without a token nothing is sent.")
     (when (< start (length template)) (push (subseq template start) parts))
     (nreverse parts)))
 
-(defun %utf-8-encode-char (c out)
-  (let ((code (char-code c)))
-    (cond ((< code #x80) (vector-push-extend code out))
-          ((< code #x800)
-           (vector-push-extend (logior #xC0 (ash code -6)) out)
-           (vector-push-extend (logior #x80 (logand code #x3F)) out))
-          ((< code #x10000)
-           (vector-push-extend (logior #xE0 (ash code -12)) out)
-           (vector-push-extend (logior #x80 (logand (ash code -6) #x3F)) out)
-           (vector-push-extend (logior #x80 (logand code #x3F)) out))
-          (t
-           (vector-push-extend (logior #xF0 (ash code -18)) out)
-           (vector-push-extend (logior #x80 (logand (ash code -12) #x3F)) out)
-           (vector-push-extend (logior #x80 (logand (ash code -6) #x3F)) out)
-           (vector-push-extend (logior #x80 (logand code #x3F)) out)))))
-
-(defun %utf-8-decode (octets)
-  "Decode OCTETS; a malformed sequence decodes byte by byte as Latin-1."
-  (with-output-to-string (s)
-    (loop with i = 0 with n = (length octets)
-          while (< i n)
-          do (let* ((b (aref octets i))
-                    (len (cond ((< b #x80) 1) ((= (logand b #xE0) #xC0) 2)
-                               ((= (logand b #xF0) #xE0) 3) ((= (logand b #xF8) #xF0) 4) (t 0))))
-               (if (and (> len 1) (<= (+ i len) n)
-                        (loop for k from 1 below len always (= (logand (aref octets (+ i k)) #xC0) #x80)))
-                   (let ((code (logand b (ash #xFF (- (1+ len))))))
-                     (loop for k from 1 below len
-                           do (setf code (logior (ash code 6) (logand (aref octets (+ i k)) #x3F))))
-                     (write-char (code-char code) s)
-                     (incf i len))
-                   (progn (write-char (code-char b) s) (incf i)))))))
+(defparameter +ascii-characters+
+  (let ((s (make-string 128)))
+    (dotimes (i 128 s) (setf (char s i) (code-char i))))
+  "Every ASCII character: the :SAFE set that percent-escapes only non-ASCII.")
 
 (defun %percent-decode (string)
+  "Percent-decode a URI template value through encoding-protocol: raw non-ASCII
+   characters are taken as their UTF-8 octets (IRI form), then the octets are
+   decoded as strict UTF-8. Malformed escapes and invalid UTF-8 (overlong forms
+   such as %C0%AF, surrogates, truncated sequences) signal MCP-ERROR
+   (invalid params) with the ENCODING-DECODE-ERROR as its cause."
   (if (not (find #\% string))
       string
-      (let ((octets (make-array 0 :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
-        (loop with i = 0
-              while (< i (length string))
-              do (let ((c (char string i)))
-                   (if (and (char= c #\%) (<= (+ i 3) (length string))
-                            (digit-char-p (char string (+ i 1)) 16)
-                            (digit-char-p (char string (+ i 2)) 16))
-                       (progn (vector-push-extend (parse-integer string :start (1+ i) :end (+ i 3) :radix 16) octets)
-                              (incf i 3))
-                       (progn (%utf-8-encode-char c octets) (incf i)))))
-        (%utf-8-decode octets))))
+      (handler-case
+          (encoding-protocol:percent-decode
+           (encoding-protocol:percent-encode string :safe +ascii-characters+))
+        (encoding-protocol:encoding-error (e)
+          (error 'mcp-error
+                 :message (format nil "invalid percent-encoding in URI ~S: ~A" string e)
+                 :code rpc-protocol:+invalid-params+
+                 :cause e)))))
 
 (defun match-uri-template (template uri)
   "Alist of (name . value) when URI matches TEMPLATE, else NIL (a match with no
-variables returns T). {var} matches no /, {+var} matches anything."
+variables returns T). {var} matches no literal /, {+var} matches anything.
+Values are percent-decoded strictly (see %PERCENT-DECODE): a {var} value may
+contain / or .. after decoding %2F, so handlers must validate it before use as a
+path. Malformed or overlong escapes signal MCP-ERROR."
   (labels ((walk (parts pos acc)
              (cond ((null parts)
-                    (and (= pos (length uri)) (or (reverse acc) t)))
+                    (and (= pos (length uri))
+                         (or (loop for (name . raw) in (reverse acc)
+                                   collect (cons name (%percent-decode raw)))
+                             t)))
                    ((stringp (first parts))
                     (let* ((lit (first parts)) (end (+ pos (length lit))))
                       (and (<= end (length uri)) (string= lit uri :start2 pos :end2 end)
@@ -324,7 +304,7 @@ variables returns T). {var} matches no /, {+var} matches anything."
                             for value = (subseq uri pos end)
                             when (or reserved (not (find #\/ value)))
                               do (let ((m (walk (rest parts) end
-                                                (acons name (%percent-decode value) acc))))
+                                                (acons name value acc))))
                                    (when m (return m)))))))))
     (walk (%parse-uri-template template) 0 '())))
 

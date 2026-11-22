@@ -531,3 +531,31 @@
         (mcp-protocol:notify-tools-list-changed server))
       (ok (equal '("notifications/tools/list_changed") local))
       (ok (null (funcall sent))))))
+
+(deftest uri-template-utf-8-decoding
+  (ok (equal '(("id" . "é ж")) (mcp-protocol:match-uri-template "memo://{id}" "memo://%C3%A9%20%D0%B6")))
+  (ok (equal '(("id" . "日本")) (mcp-protocol:match-uri-template "memo://{id}" "memo://日本")))
+  (ok (equal '(("id" . "é")) (mcp-protocol:match-uri-template "memo://{id}.json" "memo://%C3%A9.json")))
+  (ok (equal '(("id" . "a/b")) (mcp-protocol:match-uri-template "memo://{id}" "memo://a%2Fb"))))
+
+(deftest-parametrize uri-template-rejects-invalid-utf-8
+    ((escape)
+     ("%C0%AF")                         ; overlong "/"
+     ("%E0%80%AF")                      ; 3-byte overlong "/"
+     ("%F0%80%80%AF")                   ; 4-byte overlong "/"
+     ("%C0%AE%C0%AE")                   ; overlong ".."
+     ("%ED%A0%80")                      ; surrogate
+     ("%F4%90%80%80")                   ; > U+10FFFF
+     ("%FF")                            ; invalid lead byte
+     ("%80")                            ; stray continuation
+     ("%C3")                            ; truncated
+     ("%G1")                            ; bad hex
+     ("%2"))                            ; short escape
+  (let ((c (handler-case
+               (progn (mcp-protocol:match-uri-template
+                       "memo://{id}" (concatenate 'string "memo://x" escape))
+                      nil)
+             (mcp-protocol:mcp-error (e) e))))
+    (ok (typep c 'mcp-protocol:mcp-error))
+    (ok (and c (eql rpc-protocol:+invalid-params+ (mcp-protocol:mcp-error-code c))))
+    (ok (and c (typep (mcp-protocol:mcp-error-cause c) 'encoding-protocol:encoding-error)))))
