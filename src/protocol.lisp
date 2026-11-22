@@ -47,19 +47,63 @@
   (or (eq (mcp-client-era client) :modern)
       (string= method "server/discover")))
 
-(defun %rpc-call (client method params)
+(defun %next-client-request-id (client)
+  "0.4.0 (#14): the next client-chosen request id \"mcp-N\", N from 1.
+Atomic on SBCL (CAS on the slot); elsewhere a plain INCF (mcp-protocol has no
+threading dependency), so two concurrent timed calls on one client could draw
+the same N there."
+  #+sbcl
+  (loop for old = (slot-value client 'request-counter)
+        when (eql old (sb-ext:compare-and-swap (slot-value client 'request-counter)
+                                               old (1+ old)))
+          return (format nil "mcp-~d" (1+ old)))
+  #-sbcl
+  (format nil "mcp-~d" (incf (mcp-client-request-counter client))))
+
+(defun %timed-out-p (start timeout)
+  "True when at least TIMEOUT seconds passed since internal real time START.
+Compared in internal time units, rounded down, so a transport that waited
+ROUND(TIMEOUT * units) from a later start always counts as timed out."
+  (>= (- (get-internal-real-time) start)
+      (floor (* timeout internal-time-units-per-second))))
+
+(defun %rpc-call (client method params &key timeout)
+  "Send request METHOD through rpc-protocol; an RPC-ERROR becomes an MCP-ERROR.
+0.4.0 (#14): with TIMEOUT (seconds), the id is a client-chosen \"mcp-N\"; when
+the call fails with an RPC-ERROR after at least TIMEOUT seconds, the request is
+cancelled (notifications/cancelled, reason \"timeout\"; a failed notify is
+ignored) and MCP-TIMEOUT is signalled instead. The id and clock are taken
+inside the RETRY restart, so a RETRY sends a fresh request. Without TIMEOUT the
+transport chooses the id, as in 0.3."
+  (when timeout
+    (check-type timeout (real (0))))
   (with-mcp-restarts
     (let ((params (if (%modern-wire-p client method)
                       (%with-client-meta client params)
-                      (%ensure-params params))))
+                      (%ensure-params params)))
+          (id (and timeout (%next-client-request-id client)))
+          (start (get-internal-real-time)))
       (handler-case
-          (rpc-protocol:rpc-call method params :transport (%client-transport client))
+          (rpc-protocol:rpc-call method params :transport (%client-transport client)
+                                               :timeout timeout :id id)
         (rpc-protocol:rpc-error (c)
-          (error 'mcp-error
-                 :message (rpc-protocol:rpc-error-message c)
-                 :code (rpc-protocol:rpc-error-code c)
-                 :data (rpc-protocol:rpc-error-data c)
-                 :cause c))))))
+          (cond
+            ((and timeout (%timed-out-p start timeout))
+             ;; The rule: a notify failure while cancelling is ignored (the
+             ;; peer may be gone); the timeout is what the caller must see.
+             (handler-case (mcp-cancel client :request-id id :reason "timeout")
+               (error () nil))
+             (error 'mcp-timeout
+                    :method method :seconds timeout :request-id id
+                    :message (format nil "~a timed out after ~a s" method timeout)
+                    :data (rpc-protocol:rpc-error-data c)
+                    :cause c))
+            (t
+             (error 'mcp-error
+                    :message (rpc-protocol:rpc-error-message c)
+                    :code (rpc-protocol:rpc-error-code c)
+                    :data (rpc-protocol:rpc-error-data c)
+                    :cause c))))))))
 
 (defun %rpc-notify (client method params)
   (with-mcp-restarts
@@ -113,10 +157,20 @@
                "description" (mcp-prompt-description prompt)
                "arguments" (or (mcp-prompt-arguments prompt) #())))
 
+(defun %json-value (value)
+  "VALUE, with JSON null (:NULL) as NIL. JSON false decodes to NIL already."
+  (if (eq value :null) nil value))
+
 (defun %parse-tool (obj)
+  "An MCP-TOOL with every field of the tool object OBJ (0.4.0, #14)."
   (make-mcp-tool (param obj "name")
-                 :description (param obj "description")
-                 :input-schema (param obj "inputSchema")))
+                 :title (%json-value (param obj "title"))
+                 :description (%json-value (param obj "description"))
+                 :input-schema (%json-value (param obj "inputSchema"))
+                 :output-schema (%json-value (param obj "outputSchema"))
+                 :annotations (%json-value (param obj "annotations"))
+                 :icons (%json-value (param obj "icons"))
+                 :meta (%json-value (param obj "_meta"))))
 
 (defun %parse-resource (obj)
   (make-mcp-resource (param obj "uri")
@@ -483,17 +537,23 @@
                                            (or (mcp-prompt-description prompt)
                                                name)))))))))
 
-(defmethod list-tools ((client mcp-client) &key cursor)
-  (let ((result (%rpc-call client "tools/list"
-                           (json-object "cursor" (or cursor :omit)))))
-    (%vec-map (param result "tools") #'%parse-tool)))
+(defmethod list-tools ((client mcp-client) &key cursor timeout)
+  "→ (values TOOLS NEXT-CURSOR); NEXT-CURSOR is NIL on the last page (0.4.0)."
+  (let* ((result (%rpc-call client "tools/list"
+                            (json-object "cursor" (or cursor :omit))
+                            :timeout timeout))
+         (next (param result "nextCursor")))
+    (values (%vec-map (param result "tools") #'%parse-tool)
+            (and (stringp next) next))))
 
-(defmethod call-tool ((client mcp-client) name arguments &key)
+(defmethod call-tool ((client mcp-client) name arguments &key timeout)
   (let ((result (%rpc-call client "tools/call"
                            (json-object "name" name
-                                        "arguments" (or arguments (json-object))))))
+                                        "arguments" (or arguments (json-object)))
+                           :timeout timeout)))
     (if (and (hash-table-p result)
              (equal (gethash "resultType" result) "input_required"))
+        ;; Its own wire request: a fresh id and the full TIMEOUT.
         (%rpc-call client "tools/call"
                    (json-object "name" name
                                 "arguments" (or arguments (json-object))
@@ -501,7 +561,8 @@
                                 (fulfill-input-requests
                                  client (gethash "inputRequests" result))
                                 "requestState" (or (gethash "requestState" result)
-                                                   :omit)))
+                                                   :omit))
+                   :timeout timeout)
         result)))
 
 (defmethod list-resources ((client mcp-client) &key cursor)

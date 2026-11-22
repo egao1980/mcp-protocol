@@ -91,34 +91,131 @@
   (:documentation "0.4.0: LIST-ALL-TOOLS saw a cursor twice or too many pages.
 Restart CONTINUE returns the tools collected so far."))
 
-(defun %contract-pending (what)
-  "Contract stub (0.4.0). The implementation removes it and every call."
-  (error 'mcp-error :message (format nil "not implemented yet (0.4.0 contract): ~a" what)))
+;;; --- 1. tool fields ---------------------------------------------------------
 
 (defun mcp-tool-annotation (tool key)
-  (declare (ignore tool key))
-  (%contract-pending "mcp-tool-annotation"))
+  "The annotation KEY of TOOL (\"readOnlyHint\", \"destructiveHint\", …), NIL when
+absent, JSON false or JSON null."
+  (%json-value (param (mcp-tool-annotations tool) key)))
 
 (defun mcp-tool-read-only-p (tool)
-  (declare (ignore tool))
-  (%contract-pending "mcp-tool-read-only-p"))
+  "T exactly when TOOL's readOnlyHint is JSON true. Hints are untrusted: a host
+may lower a default with them, never raise trust."
+  (eq t (mcp-tool-annotation tool "readOnlyHint")))
+
+(defun %json-get (object key)
+  "KEY of the JSON object OBJECT (a hash table); NIL for anything else or null."
+  (and (hash-table-p object) (%json-value (gethash key object))))
 
 (defun mcp-tool-visible-to-model-p (tool)
-  (declare (ignore tool))
-  (%contract-pending "mcp-tool-visible-to-model-p"))
+  "NIL when _meta.ui.visibility is an array without \"model\" (an MCP Apps
+app-only tool); T otherwise."
+  (let ((visibility (%json-get (%json-get (mcp-tool-meta tool) "ui") "visibility")))
+    (not (and (vectorp visibility)
+              (not (stringp visibility))
+              (not (find "model" visibility :test #'equal))))))
+
+;;; --- 2. pagination ----------------------------------------------------------
 
 (defun list-all-tools (client &key (max-pages +max-tool-pages+) timeout)
-  (declare (ignore client max-pages timeout))
-  (%contract-pending "list-all-tools"))
+  "Every tool of CLIENT's server, in server order, following nextCursor.
+A cursor seen twice, or a further page past MAX-PAGES, signals
+MCP-PAGINATION-ERROR; its CONTINUE restart returns the tools collected so far."
+  (check-type max-pages (integer 1))
+  (let ((collected '())                 ; newest first
+        (seen (make-hash-table :test 'equal))
+        (pages 0)
+        (cursor nil))
+    (restart-case
+        (loop
+          (multiple-value-bind (tools next)
+              (list-tools client :cursor cursor :timeout timeout)
+            (incf pages)
+            (map nil (lambda (tool) (push tool collected)) tools)
+            (when (null next)
+              (return (reverse collected)))
+            (let ((repeated (gethash next seen)))
+              (when (or repeated (>= pages max-pages))
+                (error 'mcp-pagination-error
+                       :message (if repeated
+                                    (format nil "tools/list returned cursor ~s twice" next)
+                                    (format nil "tools/list needs more than ~d pages"
+                                            max-pages))
+                       :data (json-object "cursor" next "pages" pages))))
+            (setf (gethash next seen) t
+                  cursor next)))
+      (continue ()
+        :report "Return the tools collected so far."
+        ;; REVERSE, not NREVERSE: the list may be inspected again.
+        (reverse collected)))))
+
+;;; --- 3. messages the server sends ---------------------------------------------
+
+(defmacro %dropping-errors (&body body)
+  "Run BODY; an ERROR is dropped (→ NIL). Only for notification handling, which
+the rule says has no answer and must not signal out."
+  `(handler-case (progn ,@body)
+     (error () nil)))
 
 (defun mcp-client-handle-notification (client method params)
-  (declare (ignore client method params))
-  (%contract-pending "mcp-client-handle-notification"))
+  "Built-in handling of the server notification METHOD, then the notification
+hook. Errors in a handler or the hook are dropped. → T."
+  (cond
+    ((equal method "notifications/tools/list_changed")
+     ;; Bumped before any user code runs, so a failing callback cannot undo it.
+     (incf (mcp-client-tools-generation client))
+     (let ((fn (mcp-client-on-tools-changed client)))
+       (when fn
+         (%dropping-errors (funcall fn client)))))
+    ((equal method "notifications/message")
+     (%dropping-errors
+       (mcp-log client
+                (%json-value (param params "level"))
+                (%json-value (param params "data"))
+                :logger (%json-value (param params "logger")))))
+    ((equal method "notifications/progress")
+     (%dropping-errors
+       (send-progress client
+                      (%json-value (param params "progress"))
+                      :progress-token (%json-value (param params "progressToken"))
+                      :total (%json-value (param params "total"))
+                      :message (%json-value (param params "message"))))))
+  (let ((hook (mcp-client-notification-hook client)))
+    (when hook
+      (%dropping-errors (funcall hook client method params))))
+  t)
+
+(defun %client-method-not-found (method)
+  (error 'rpc-protocol:rpc-error
+         :code rpc-protocol:+method-not-found+
+         :message (format nil "method not found: ~a" method)))
 
 (defun mcp-client-handle-request (client method params)
-  (declare (ignore client method params))
-  (%contract-pending "mcp-client-handle-request"))
+  "The result object for the server request METHOD, or RPC-PROTOCOL:RPC-ERROR
+(-32601 for a method without a handler; an MCP-ERROR keeps its code, message
+and data)."
+  (handler-case
+      (cond
+        ((equal method "ping") (json-object))
+        ((equal method "sampling/createMessage")
+         (if (mcp-client-sampling-handler client)
+             (create-message client params)
+             (%client-method-not-found method)))
+        ((equal method "elicitation/create")
+         (if (mcp-client-elicitation-handler client)
+             (elicit client params)
+             (%client-method-not-found method)))
+        ((equal method "roots/list") (list-roots client))
+        (t (%client-method-not-found method)))
+    ;; Same mapping as SERVE-MCP. RPC-ERROR is not an MCP-ERROR, so -32601 passes.
+    (mcp-error (c)
+      (error 'rpc-protocol:rpc-error
+             :message (or (mcp-error-message c) "mcp error")
+             :code (or (mcp-error-code c) rpc-protocol:+internal-error+)
+             :data (mcp-error-data c)))))
 
 (defun mcp-client-transport-handlers (client)
-  (declare (ignore client))
-  (%contract-pending "mcp-client-transport-handlers"))
+  "→ (values ON-NOTIFICATION ON-REQUEST), two (lambda (method params)) closures
+over CLIENT for a transport's :ON-NOTIFICATION / :ON-REQUEST."
+  (values (lambda (method params) (mcp-client-handle-notification client method params))
+          (lambda (method params) (mcp-client-handle-request client method params))))
