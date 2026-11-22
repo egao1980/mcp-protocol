@@ -160,7 +160,20 @@ transport has no such path.")))
                         :accessor mcp-client-elicitation-handler :initform nil)
    (log-handler :initarg :log-handler :accessor mcp-client-log-handler :initform nil)
    (progress-handler :initarg :progress-handler
-                     :accessor mcp-client-progress-handler :initform nil)))
+                     :accessor mcp-client-progress-handler :initform nil)
+   ;; 0.4.0 (#14, given slots; behaviour in src/client.lisp)
+   (tools-generation :initform 0 :accessor mcp-client-tools-generation
+                     :documentation "Incremented by MCP-CLIENT-HANDLE-NOTIFICATION on each
+notifications/tools/list_changed, so a host that caches the tool list can tell it is stale.")
+   (on-tools-changed :initarg :on-tools-changed :initform nil
+                     :accessor mcp-client-on-tools-changed
+                     :documentation "(lambda (client)) called after the generation is bumped.")
+   (notification-hook :initarg :notification-hook :initform nil
+                      :accessor mcp-client-notification-hook
+                      :documentation "(lambda (client method params)) for every notification the
+server sends, after the built-in handling (list_changed, message, progress).")
+   (request-counter :initform 0 :accessor mcp-client-request-counter
+                    :documentation "Counter for the client-chosen request ids \"mcp-N\" (CALL-TOOL :TIMEOUT).")))
 
 (defclass mcp-tool ()
   ((name :initarg :name :accessor mcp-tool-name)
@@ -170,6 +183,8 @@ transport has no such path.")))
    (output-schema :initarg :output-schema :accessor mcp-tool-output-schema :initform nil)
    (annotations :initarg :annotations :accessor mcp-tool-annotations :initform nil)
    (icons :initarg :icons :accessor mcp-tool-icons :initform nil)
+   ;; 0.4.0 (#14): the tool object's "_meta" as given (a JSON object), or NIL.
+   (meta :initarg :meta :accessor mcp-tool-meta :initform nil)
    (handler :initarg :handler :accessor mcp-tool-handler)
    (compiled-input-schema :initarg :compiled-input-schema
                           :accessor mcp-tool-compiled-input-schema
@@ -294,8 +309,9 @@ the text and a mime type as two values.")))
   (:documentation "Transport adapter. Concrete backends live in mcp-backend-*."))
 
 (defun make-mcp-tool (name &key description title input-schema output-schema
-                             annotations icons handler)
+                             annotations icons meta handler)
   (make-instance 'mcp-tool
+                 :meta meta
                  :name name
                  :title title
                  :description (or description "")
