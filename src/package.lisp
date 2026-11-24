@@ -199,7 +199,13 @@
    #:mcp-progress-token
    #:mcp-progress-value
    #:mcp-progress-total
-   #:mcp-progress-message)
+   #:mcp-progress-message
+   ;; 0.5.0 (H3e-2b): capabilities from handlers, MRTR answers on the server side
+   #:mcp-client-default-capabilities
+   #:*mcp-input-responses*
+   #:*mcp-request-state*
+   #:mcp-input-response
+   #:+max-input-rounds+)
   (:documentation
    "MCP dual-era protocol: modern 2026-07-28 (stateless _meta + server/discover)
     and legacy 2025-11-25 (initialize handshake). JSON-RPC via rpc-protocol.

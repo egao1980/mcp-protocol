@@ -1,5 +1,5 @@
 (defsystem "mcp-protocol"
-  :version "0.4.1"
+  :version "0.5.0"
   :description "CLOS MCP client/server protocol (2026-07-28 + 2025-11-25 dual-era)"
   :author "egao1980"
   :license "MIT"
@@ -16,7 +16,9 @@
                (:file "features")
                (:file "protocol")
                ;; 0.4.0 (#14)
-               (:file "client"))
+               (:file "client")
+               ;; 0.5.0 (H3e-2b)
+               (:file "host"))
   :in-order-to ((test-op (test-op "mcp-protocol/tests"))))
 
 (defsystem "mcp-protocol/tests"
@@ -29,7 +31,9 @@
   :components ((:file "package")
                (:file "protocol-test")
                ;; 0.4.0 (#14)
-               (:file "client-test"))
+               (:file "client-test")
+               ;; 0.5.0 (H3e-2b)
+               (:file "host-test"))
   :perform (test-op (o c)
              (unless (symbol-call :rove :run c)
                (error "tests failed for ~A" (component-name c)))))
