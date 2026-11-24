@@ -30,7 +30,7 @@
                (json-object "name" (mcp-peer-name client)
                             "version" (mcp-peer-version client))
                "io.modelcontextprotocol/clientCapabilities"
-               (or (mcp-client-client-capabilities client) (json-object))))
+               (%client-capabilities client)))
 
 (defun %ensure-params (params)
   (cond
@@ -344,7 +344,7 @@ transport chooses the id, as in 0.3."
          (info (or client-info
                    (json-object "name" (mcp-peer-name client)
                                 "version" (mcp-peer-version client))))
-         (caps (or capabilities (json-object)))
+         (caps (or capabilities (%client-capabilities client)))
          (result (%rpc-call client "initialize"
                             (json-object "protocolVersion" ver
                                          "capabilities" caps
@@ -547,23 +547,11 @@ transport chooses the id, as in 0.3."
             (and (stringp next) next))))
 
 (defmethod call-tool ((client mcp-client) name arguments &key timeout)
-  (let ((result (%rpc-call client "tools/call"
-                           (json-object "name" name
-                                        "arguments" (or arguments (json-object)))
-                           :timeout timeout)))
-    (if (and (hash-table-p result)
-             (equal (gethash "resultType" result) "input_required"))
-        ;; Its own wire request: a fresh id and the full TIMEOUT.
-        (%rpc-call client "tools/call"
-                   (json-object "name" name
-                                "arguments" (or arguments (json-object))
-                                "inputResponses"
-                                (fulfill-input-requests
-                                 client (gethash "inputRequests" result))
-                                "requestState" (or (gethash "requestState" result)
-                                                   :omit))
-                   :timeout timeout)
-        result)))
+  "tools/call NAME, answering input_required rounds until the tool is done
+(0.5.0, src/host.lisp rule 3, %CALL-TOOL-ROUNDS): every round carries the
+answers given so far and the latest requestState, each with the full TIMEOUT,
+up to the round limit; then MCP-ERROR."
+  (%call-tool-rounds client name arguments timeout))
 
 (defmethod list-resources ((client mcp-client) &key cursor)
   (let ((result (%rpc-call client "resources/list"
@@ -678,8 +666,11 @@ transport chooses the id, as in 0.3."
                         (json-object "tools" vec "nextCursor" (or next :omit))))))
               ((string= method "tools/call")
                (let ((*progress-token* (param (param params "_meta") "progressToken")))
-                 (done (call-tool server (or (param params "name") (fail "missing tool name"))
-                                  (param params "arguments")))))
+                 (done (%call-with-input-responses   ; 0.5.0: MRTR answers (src/host.lisp rule 2)
+                        params
+                        (lambda ()
+                          (call-tool server (or (param params "name") (fail "missing tool name"))
+                                     (param params "arguments")))))))
               ((string= method "resources/subscribe")
                (done (subscribe-resource server (or (param params "uri") (fail "missing uri")))))
               ((string= method "resources/unsubscribe")

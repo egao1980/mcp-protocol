@@ -44,6 +44,14 @@ Spec surface (GFs + CLOS). Backends may leave I/O unimplemented:
 
 OAuth stays transport-level (HTTP backend), not a protocol GF.
 
+### 0.5.0: host answers
+
+Rules: the header of `src/host.lisp`.
+
+- **Capabilities from handlers.** A client without `:capabilities` advertises what it can answer: `sampling: {}` (a sampling handler), `elicitation: {form: {}}` (an elicitation handler), `roots: {}` (roots). They go in the 2025-11-25 `initialize` and every 2026-07-28 request's `_meta`. `mcp-client-default-capabilities` returns them. Explicit `:capabilities` replace them whole; to extend them, start from `(mcp-client-default-capabilities client)`.
+- **MRTR, server side.** While `tools/call` is handled, `*mcp-input-responses*` and `*mcp-request-state*` hold the request's `inputResponses` / `requestState`. A tool re-runs from the top on every round. `request-sampling` / `request-elicitation` / `request-roots` return an answer that is there instead of signalling; `mcp-input-response id` → `(values value present-p)`.
+- **MRTR, client side.** `call-tool` answers `input_required` rounds through `fulfill-input-requests`. Each round carries every answer so far (merged by id, the later wins) and the latest `requestState`, with the full `:timeout`. After `+max-input-rounds+` (10) rounds it signals `mcp-error` (-32603, "tools/call NAME still needs input after N rounds"). A handler's `mcp-error` (a refusal) ends `call-tool` with that error. Note that `with-auto-retry` retries any `mcp-error`, these included.
+
 Brief: [cl-stack/docs/capabilities/mcp.md](https://github.com/egao1980/cl-stack/blob/main/docs/capabilities/mcp.md). Tracks [cl-stack#185](https://github.com/egao1980/cl-stack/issues/185).
 
 ## License

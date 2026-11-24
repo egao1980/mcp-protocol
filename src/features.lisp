@@ -28,26 +28,35 @@
                "inputRequests" (or input-requests :omit)
                "requestState" (or request-state :omit)))
 
+(defun %input-or-signal (id method params request-state)
+  "0.5.0 (src/host.lisp rule 2): the client's answer to input request ID when
+the tools/call being handled carries one (MCP-INPUT-RESPONSE), signalling
+nothing; otherwise signal MCP-INPUT-REQUIRED for METHOD with PARAMS as 0.4,
+with the PROVIDE-INPUT / DECLINE-INPUT restarts."
+  (multiple-value-bind (value present-p) (mcp-input-response id)
+    (if present-p
+        value
+        (%signal-input-required
+         :input-requests (json-object id (json-object "method" method "params" params))
+         :request-state request-state))))
+
 (defun request-sampling (params &key (id "sample") request-state)
-  (%signal-input-required
-   :input-requests
-   (json-object id (json-object "method" "sampling/createMessage"
-                                "params" (or params (json-object))))
-   :request-state request-state))
+  "Ask the client for sampling/createMessage with PARAMS as input request ID.
+→ the client's result when the tools/call being handled answers ID (0.5.0);
+otherwise signals MCP-INPUT-REQUIRED (restarts PROVIDE-INPUT, DECLINE-INPUT)."
+  (%input-or-signal id "sampling/createMessage" (or params (json-object)) request-state))
 
 (defun request-elicitation (params &key (id "elicit") request-state)
-  (%signal-input-required
-   :input-requests
-   (json-object id (json-object "method" "elicitation/create"
-                                "params" (or params (json-object))))
-   :request-state request-state))
+  "Ask the client for elicitation/create with PARAMS as input request ID.
+→ the client's result when the tools/call being handled answers ID (0.5.0);
+otherwise signals MCP-INPUT-REQUIRED (restarts PROVIDE-INPUT, DECLINE-INPUT)."
+  (%input-or-signal id "elicitation/create" (or params (json-object)) request-state))
 
 (defun request-roots (&key (id "roots") request-state)
-  (%signal-input-required
-   :input-requests
-   (json-object id (json-object "method" "roots/list"
-                                "params" (json-object)))
-   :request-state request-state))
+  "Ask the client for roots/list as input request ID.
+→ the client's result when the tools/call being handled answers ID (0.5.0);
+otherwise signals MCP-INPUT-REQUIRED (restarts PROVIDE-INPUT, DECLINE-INPUT)."
+  (%input-or-signal id "roots/list" (json-object) request-state))
 
 (defgeneric register-resource-template (server template &key)
   (:method ((server mcp-server) (template mcp-resource-template) &key)
